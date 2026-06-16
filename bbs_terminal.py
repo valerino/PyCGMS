@@ -4196,6 +4196,15 @@ class BBSTerminal(tk.Tk):
         else:
             self.geometry("1320x880")
         
+        # Gespeicherte Fenstergroesse/-position wiederherstellen (ueberschreibt
+        # den Default oben). Wird beim Schliessen in save_config() gespeichert.
+        saved_geom = self.settings.get('window_geometry', '')
+        if saved_geom:
+            try:
+                self.geometry(saved_geom)
+            except Exception:
+                pass
+        
         # Keyboard Layout Einstellung laden und aktivieren
         swap_zy = self.settings.get('swap_zy', False)
         from c64_keyboard import set_swap_zy
@@ -4349,7 +4358,7 @@ class BBSTerminal(tk.Tk):
         self.file_menu.add_checkbutton(label="Local Echo (Alt+E)", variable=self.echo_var, 
                                   command=self.toggle_echo)
         self.file_menu.add_separator()
-        self.file_menu.add_command(label="Exit", command=self.quit)
+        self.file_menu.add_command(label="Exit", command=self._quit_app)
         
         # Transfer
         transfer_menu = tk.Menu(menubar, tearoff=0)
@@ -4455,6 +4464,46 @@ class BBSTerminal(tk.Tk):
         """Control-Taste losgelassen"""
         self.ctrl_pressed = False
     
+    def _save_window_geometry(self):
+        """Merkt aktuelle Fenstergroesse/-position.
+
+        Schreibt GEZIELT nur 'window_geometry' in bbs_config.json (read-merge-
+        write), damit weder die BBS-Liste noch andere Settings ueberschrieben
+        werden.
+        """
+        try:
+            if self.fullscreen:
+                return  # Fullscreen-Geometrie nicht speichern
+            geom = self.geometry()  # "WxH+X+Y"
+            wh = geom.split('+', 1)[0]
+            w, _, h = wh.partition('x')
+            if not (w.isdigit() and h.isdigit() and int(w) > 100 and int(h) > 100):
+                return
+            
+            self.settings['window_geometry'] = geom
+            
+            # Read-merge-write: nur window_geometry anfassen
+            config = {}
+            if os.path.exists('bbs_config.json'):
+                try:
+                    with open('bbs_config.json', 'r', encoding='utf-8') as f:
+                        config = json.load(f)
+                except (json.JSONDecodeError, OSError):
+                    config = {}
+            config['window_geometry'] = geom
+            with open('bbs_config.json', 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            debug_print(f"Could not save window geometry: {e}")
+    
+    def _quit_app(self):
+        """Menue Exit: Geometrie speichern, dann sauber beenden."""
+        self._save_window_geometry()
+        try:
+            self.destroy()
+        except Exception:
+            self.quit()
+    
     def _on_close_request(self):
         """WM_DELETE_WINDOW Handler.
 
@@ -4470,7 +4519,8 @@ class BBSTerminal(tk.Tk):
             if not (last_num == 4 and (time.time() - last_ts) < 0.4):
                 self.send_hotkey(4)
             return  # Fenster NICHT schliessen
-        # Normales Schliessen
+        # Normales Schliessen: Geometrie merken
+        self._save_window_geometry()
         try:
             self.destroy()
         except Exception:
@@ -6942,6 +6992,7 @@ class BBSTerminal(tk.Tk):
                     config.setdefault('serial_baudrate', 9600)
                     config.setdefault('local_echo', False)
                     config.setdefault('use_day_folders', False)
+                    config.setdefault('window_geometry', '')
                     return config
         except:
             pass
