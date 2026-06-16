@@ -423,9 +423,13 @@ class ScrollbackViewer(tk.Toplevel):
     - Füllt das gesamte Fenster
     """
     
-    def __init__(self, parent, scrollback_buffer, terminal_width=80):
+    def __init__(self, parent, scrollback_buffer, terminal_width=80,
+                 amiga_mode=False, amiga_font=None):
         super().__init__(parent)
-        self.title(f"Scrollback Buffer (PETSCII) - {terminal_width} Columns")
+        self.amiga_mode = amiga_mode
+        self.amiga_font = amiga_font
+        mode_label = "ANSI/Amiga" if amiga_mode else "PETSCII"
+        self.title(f"Scrollback Buffer ({mode_label}) - {terminal_width} Columns")
         self.geometry("1280x800")
         self.buffer = scrollback_buffer
         self.terminal_width = terminal_width
@@ -442,20 +446,8 @@ class ScrollbackViewer(tk.Toplevel):
         from PIL import ImageTk
         self.ImageTk = ImageTk
         
-        # PETSCII Screen + Parser für Scrollback
-        from petscii_parser import PETSCIIScreenBuffer, PETSCIIParser
-        from c64_rom_renderer import C64ROMFontRenderer
-        
-        # Screen für Parsing (wächst unbegrenzt)
-        self.screen = PETSCIIScreenBuffer(width=terminal_width, height=50)
-        self.screen.unlimited_growth = True
-        self.parser = PETSCIIParser(self.screen, scrollback_mode=True)
-        self.renderer = C64ROMFontRenderer(
-            self.screen,
-            font_upper_path="upper.bmp",
-            font_lower_path="lower.bmp",
-            zoom=2
-        )
+        # Screen + Parser + Renderer fuer Scrollback (Amiga -> ANSI, C64 -> PETSCII)
+        self.screen, self.parser, self.renderer = self._make_screen_stack(terminal_width)
         
         # Toolbar
         toolbar = ttk.Frame(self)
@@ -670,9 +662,47 @@ class ScrollbackViewer(tk.Toplevel):
         
         self.render_viewport()
     
+    def _make_screen_stack(self, width):
+        """Erzeugt (screen, parser, renderer) passend zum Modus.
+
+        Amiga-Mode -> ANSIParser + AmigaFontRenderer (wie im Haupt-Terminal),
+        C64-Mode   -> PETSCIIParser + C64ROMFontRenderer.
+        Der Screen-Buffer ist in beiden Faellen ein PETSCIIScreenBuffer.
+        """
+        from petscii_parser import PETSCIIScreenBuffer
+
+        screen = PETSCIIScreenBuffer(width=width, height=50)
+        screen.unlimited_growth = True
+
+        if self.amiga_mode:
+            from ansi_parser import ANSIParser
+            from amiga_renderer import AmigaFontRenderer
+            try:
+                parser = ANSIParser(screen, scrollback_mode=True)
+            except TypeError:
+                parser = ANSIParser(screen)
+            renderer = AmigaFontRenderer(screen, zoom=2,
+                                         font_path=self.amiga_font or None)
+        else:
+            from petscii_parser import PETSCIIParser
+            from c64_rom_renderer import C64ROMFontRenderer
+            parser = PETSCIIParser(screen, scrollback_mode=True)
+            renderer = C64ROMFontRenderer(
+                screen,
+                font_upper_path="upper.bmp",
+                font_lower_path="lower.bmp",
+                zoom=2
+            )
+        return screen, parser, renderer
+
     def render_viewport(self):
         """Rendert den sichtbaren Bereich - füllt das ganze Fenster"""
         from PIL import Image
+
+        # Amiga-Renderer hat keine C64-Cell-API -> generischer Fensterausschnitt
+        if self.amiga_mode:
+            self._render_viewport_amiga()
+            return
         
         # Canvas-Größe holen
         canvas_width = self.canvas.winfo_width()
@@ -721,6 +751,58 @@ class ScrollbackViewer(tk.Toplevel):
         
         self._update_scrollbar()
     
+    def _render_viewport_amiga(self):
+        """Rendert den sichtbaren Bereich im Amiga/ANSI-Modus.
+
+        Der AmigaFontRenderer hat keine C64-Cell-API (_render_cell/palette/
+        font_upper/lower), rendert aber den ganzen self.screen via render().
+        Deshalb blenden wir temporaer einen Fensterausschnitt mit nur den
+        sichtbaren Zeilen ein (Cell-Referenzen, kein Deep-Copy).
+        """
+        from petscii_parser import PETSCIIScreenBuffer
+
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+        if canvas_width < 10 or canvas_height < 10:
+            return  # Canvas noch nicht initialisiert
+
+        char_height = getattr(self.renderer, 'char_height', 8 * self.renderer.zoom)
+        viewport_lines = max(1, canvas_height // char_height)
+
+        page_start = self.current_page * self.lines_per_page
+        abs_start = page_start + self.scroll_offset
+        abs_end = min(abs_start + viewport_lines, self.screen.height)
+
+        if abs_end <= abs_start:
+            self.canvas.delete('all')
+            self.lines_var.set(f"Lines 0-0 / {self.screen.height}")
+            self._update_scrollbar()
+            return
+
+        # Fenster-Screen mit nur den sichtbaren Zeilen (Referenzen, kein Copy)
+        win = PETSCIIScreenBuffer(width=self.screen.width, height=abs_end - abs_start)
+        win.unlimited_growth = True
+        win.charset_mode = getattr(self.screen, 'charset_mode', 'lower')
+        if hasattr(self.screen, 'screen_bg'):
+            win.screen_bg = self.screen.screen_bg
+        win.buffer = [self.screen.buffer[y] for y in range(abs_start, abs_end)]
+        win.height = len(win.buffer)
+
+        # Renderer temporaer auf den Fenster-Screen zeigen lassen
+        real_screen = self.renderer.screen
+        try:
+            self.renderer.screen = win
+            img = self.renderer.render()
+        finally:
+            self.renderer.screen = real_screen
+
+        self.photo = self.ImageTk.PhotoImage(img)
+        self.canvas.delete('all')
+        self.canvas.create_image(0, 0, anchor=tk.NW, image=self.photo)
+
+        self.lines_var.set(f"Lines {abs_start + 1}-{abs_end} / {self.screen.height}")
+        self._update_scrollbar()
+    
     def clear_buffer(self):
         """Buffer löschen"""
         if messagebox.askyesno("Confirm", "Scrollback Buffer löschen?", parent=self):
@@ -755,10 +837,8 @@ class ScrollbackViewer(tk.Toplevel):
                             if 'width' in metadata:
                                 new_width = metadata['width']
                                 if new_width != self.screen.width:
-                                    from petscii_parser import PETSCIIScreenBuffer, PETSCIIParser
-                                    self.screen = PETSCIIScreenBuffer(width=new_width, height=50)
-                                    self.screen.unlimited_growth = True
-                                    self.parser = PETSCIIParser(self.screen, scrollback_mode=True)
+                                    self.screen, self.parser, self.renderer = \
+                                        self._make_screen_stack(new_width)
                         except (json.JSONDecodeError, UnicodeDecodeError):
                             petscii_data = raw_data
                             metadata = None

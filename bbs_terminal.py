@@ -42,6 +42,85 @@ def debug_print(*args, **kwargs):
         print(*args, **kwargs)
 
 
+# --- Hotkey file format -----------------------------------------------------
+# Legacy hotkeys.seq stored one hotkey per CR-separated line. That makes it
+# impossible to store a hotkey that itself contains CR/LF (e.g. a multi-line
+# signature): the embedded CR was read as a record separator and the extra
+# lines spilled over into F2, F3, ... overwriting them.
+#
+# V2 format: a magic header followed by exactly 10 length-prefixed records
+# (F1..F10). Each record is a 2-byte big-endian length + raw payload bytes, so
+# ANY byte (including 0x0D/0x0A/0x00) round-trips cleanly. Reading transparently
+# falls back to the legacy CR/LF split for old files.
+HOTKEY_MAGIC = b'PYCGMS-HK2\n'
+
+
+def decode_hotkeys(data):
+    """Parse hotkeys.seq bytes -> dict {fkey_num: raw_payload_bytes}.
+
+    Returns payloads WITHOUT any auto-appended RETURN. Supports the new V2
+    length-prefixed format and the legacy CR/LF separated format.
+    """
+    result = {}
+    if not data:
+        return result
+
+    if data.startswith(HOTKEY_MAGIC):
+        body = data[len(HOTKEY_MAGIC):]
+        pos = 0
+        idx = 1
+        while idx <= 10 and pos + 2 <= len(body):
+            length = (body[pos] << 8) | body[pos + 1]
+            pos += 2
+            payload = bytes(body[pos:pos + length])
+            pos += length
+            if payload:
+                result[idx] = payload
+            idx += 1
+        return result
+
+    # Legacy: split on CR (0x0D) or LF (0x0A), one record per line
+    lines = []
+    current = bytearray()
+    for byte in data:
+        if byte == 0x0D or byte == 0x0A:
+            if current:
+                lines.append(bytes(current))
+                current = bytearray()
+        else:
+            current.append(byte)
+    if current:
+        lines.append(bytes(current))
+    for i, line_bytes in enumerate(lines[:10], start=1):
+        if line_bytes:
+            result[i] = line_bytes
+    return result
+
+
+def encode_hotkeys(hotkeys):
+    """Serialize {fkey_num: payload_bytes} -> V2 hotkeys.seq bytes.
+
+    A single trailing CR/LF is stripped from each payload so the on-disk form
+    never carries the RETURN that the runtime appends when sending. Internal
+    CR/LF (line breaks inside a multi-line hotkey) are preserved.
+    """
+    out = bytearray(HOTKEY_MAGIC)
+    for i in range(1, 11):
+        payload = hotkeys.get(i) or b''
+        if isinstance(payload, bytearray):
+            payload = bytes(payload)
+        # strip exactly one trailing CR and/or LF (not the internal ones)
+        if payload.endswith(b'\r\n'):
+            payload = payload[:-2]
+        elif payload.endswith((b'\r', b'\n')):
+            payload = payload[:-1]
+        length = len(payload)
+        out.append((length >> 8) & 0xFF)
+        out.append(length & 0xFF)
+        out.extend(payload)
+    return bytes(out)
+
+
 class TransferProgressDialog(tk.Toplevel):
     """Transfer Progress mit LIVE Bytes, Geschwindigkeit und Dateiname"""
     
@@ -2443,46 +2522,25 @@ class HotkeyEditorDialog(tk.Toplevel):
             with open(hotkey_file, 'rb') as f:
                 file_data = f.read()
             
-            # Splitte an CR (0x0D) oder LF (0x0A)
-            lines = []
-            current_line = bytearray()
-            
-            for byte in file_data:
-                if byte == 0x0D or byte == 0x0A:
-                    if len(current_line) > 0:
-                        lines.append(bytes(current_line))
-                        current_line = bytearray()
-                else:
-                    current_line.append(byte)
-            
-            if len(current_line) > 0:
-                lines.append(bytes(current_line))
-            
-            # Weise Hotkeys zu (Zeile 1 = F1, Zeile 2 = F2, ...)
-            for i, line_bytes in enumerate(lines[:10]):
-                fkey_num = i + 1
-                self.hotkeys[fkey_num] = line_bytes
+            # V2 length-prefixed ODER legacy CR/LF (transparent)
+            loaded = decode_hotkeys(file_data)
+            for fkey_num, payload in loaded.items():
+                self.hotkeys[fkey_num] = payload
                 
-            debug_print(f"Loaded {len(lines)} hotkeys from {hotkey_file}")
+            debug_print(f"Loaded {len(loaded)} hotkeys from {hotkey_file}")
             
         except Exception as e:
             print(f"Error loading hotkeys: {e}")
     
     def save_all_hotkeys(self):
-        """Speichert alle Hotkeys in Datei"""
+        """Speichert alle Hotkeys in Datei (V2 length-prefixed)."""
         hotkey_file = "hotkeys.seq"
         
         try:
+            # V2-Format: kann beliebige Bytes inkl. CR/LF pro Hotkey speichern,
+            # damit mehrzeilige Signaturen NICHT mehr F2/F3/... ueberschreiben.
             with open(hotkey_file, 'wb') as f:
-                for i in range(1, 11):  # F1 bis F10
-                    if i in self.hotkeys:
-                        # Schreibe Hotkey
-                        f.write(self.hotkeys[i])
-                    # Else: Leere Zeile
-                    
-                    # Füge CR hinzu (außer nach letztem)
-                    if i < 10:
-                        f.write(b'\x0D')
+                f.write(encode_hotkeys(self.hotkeys))
             
             messagebox.showinfo("Success", 
                               f"Hotkeys saved to {hotkey_file}\n\n" +
@@ -4329,6 +4387,19 @@ class BBSTerminal(tk.Tk):
         self.bind("<KeyRelease-Alt_L>", self.on_alt_release)
         self.bind("<KeyRelease-Alt_R>", self.on_alt_release)
         
+        # Control-Taste Tracking (für Ctrl+Alt+F4 vs. Windows Alt+F4-Close)
+        self.ctrl_pressed = False
+        self.bind("<KeyPress-Control_L>", self.on_ctrl_press)
+        self.bind("<KeyPress-Control_R>", self.on_ctrl_press)
+        self.bind("<KeyRelease-Control_L>", self.on_ctrl_release)
+        self.bind("<KeyRelease-Control_R>", self.on_ctrl_release)
+        
+        # Fenster-Schliessen abfangen: unter Windows macht der 4. Hotkey
+        # (Ctrl+Alt+F4) sonst nur Alt+F4 = Fenster zu. Wenn Ctrl+Alt gehalten
+        # werden, leiten wir den Close auf send_hotkey(4) um statt zu schliessen.
+        self._last_hotkey = (0, 0.0)  # (fkey_num, timestamp)
+        self.protocol("WM_DELETE_WINDOW", self._on_close_request)
+        
         # Normale F-Keys (ohne Ctrl)
         self.bind("<F1>", lambda e: self.show_upload())
         self.bind("<F2>", lambda e: self.send_file())  # ← NEU: Send Latin-1 File
@@ -4376,8 +4447,39 @@ class BBSTerminal(tk.Tk):
         """Alt-Taste losgelassen"""
         self.alt_pressed = False
     
+    def on_ctrl_press(self, event):
+        """Control-Taste gedrückt"""
+        self.ctrl_pressed = True
+    
+    def on_ctrl_release(self, event):
+        """Control-Taste losgelassen"""
+        self.ctrl_pressed = False
+    
+    def _on_close_request(self):
+        """WM_DELETE_WINDOW Handler.
+
+        Unter Windows erzeugt der 4. Hotkey (Ctrl+Alt+F4) ein Alt+F4 und damit
+        einen Close-Request. Wenn Ctrl UND Alt gerade gehalten werden, war das
+        der Hotkey -> wir senden F4 und schliessen NICHT. Sonst normales
+        Schliessen (X-Button, echtes Alt+F4 ohne Ctrl).
+        """
+        if getattr(self, 'ctrl_pressed', False) and getattr(self, 'alt_pressed', False):
+            # Doppel-Feuern vermeiden, falls das <Control-Alt-F4> Binding
+            # (z.B. unter Linux) bereits gefeuert hat.
+            last_num, last_ts = getattr(self, '_last_hotkey', (0, 0.0))
+            if not (last_num == 4 and (time.time() - last_ts) < 0.4):
+                self.send_hotkey(4)
+            return  # Fenster NICHT schliessen
+        # Normales Schliessen
+        try:
+            self.destroy()
+        except Exception:
+            pass
+    
     def send_hotkey(self, fkey_num):
         """Sendet Hotkey F1-F10 als raw bytes direkt zum Socket (PETSCII Grafik + Farbcodes)"""
+        # Merke fuer _on_close_request, um Doppel-Senden bei Ctrl+Alt+F4 zu vermeiden
+        self._last_hotkey = (fkey_num, time.time())
         if not self.connected:
             return
         
@@ -7054,14 +7156,13 @@ class BBSTerminal(tk.Tk):
         """
         Lädt Hotkeys aus hotkeys.seq Datei
         
-        Format: Bis zu 10 Zeilen, jede Zeile = eine Hotkey
-        Zeile 1 = Ctrl+Alt+F1 (AltGr+F1)
-        Zeile 2 = Ctrl+Alt+F2 (AltGr+F2)
-        ...
-        Zeile 10 = Ctrl+Alt+F10 (AltGr+F10)
+        Slot 1 = Ctrl+Alt+F1 (AltGr+F1) ... Slot 10 = Ctrl+Alt+F10
         
-        WICHTIG: Datei wird als BINÄR geladen (PETSCII Grafik + Farbcodes!)
-        Jede Zeile wird automatisch mit RETURN (0x0D) abgeschlossen.
+        WICHTIG: Datei wird als BINÄR geladen (PETSCII Grafik + Farbcodes!).
+        Format ist V2 (length-prefixed) ODER legacy CR/LF-getrennt; beides wird
+        transparent gelesen. Jeder Hotkey wird beim Senden automatisch mit
+        RETURN (0x0D) abgeschlossen - mehrzeilige Hotkeys behalten ihre internen
+        Zeilenumbrüche.
         """
         hotkey_file = "hotkeys.seq"
         
@@ -7070,41 +7171,24 @@ class BBSTerminal(tk.Tk):
             return
         
         try:
-            # WICHTIG: Lade als BINÄR (nicht Text!)
-            # PETSCII Grafik und Farbcodes würden bei Latin-1 Text-Decode kaputt gehen!
+            # BINÄR laden (PETSCII Grafik/Farbcodes nicht als Text decodieren!)
             with open(hotkey_file, 'rb') as f:
                 file_data = f.read()
             
-            # Splitte an CR (0x0D) oder LF (0x0A)
-            lines = []
-            current_line = bytearray()
+            # V2 length-prefixed ODER legacy CR/LF (transparent)
+            loaded = decode_hotkeys(file_data)
             
-            for byte in file_data:
-                if byte == 0x0D or byte == 0x0A:
-                    # Zeilen-Ende
-                    if len(current_line) > 0:
-                        lines.append(bytes(current_line))
-                        current_line = bytearray()
-                else:
-                    current_line.append(byte)
-            
-            # Letzte Zeile (falls keine CR/LF am Ende)
-            if len(current_line) > 0:
-                lines.append(bytes(current_line))
-            
-            # Lade bis zu 10 Zeilen
-            for i, line_bytes in enumerate(lines[:10], start=1):
-                if line_bytes:
-                    # Füge RETURN (0x0D) hinzu
-                    line_data = line_bytes + b'\r'
-                    
-                    self.hotkeys[i] = line_data
-                    
-                    # Zeige Hex-Vorschau (erste 20 Bytes)
-                    hex_preview = ' '.join(f'{b:02X}' for b in line_bytes[:20])
-                    if len(line_bytes) > 20:
-                        hex_preview += '...'
-                    debug_print(f"Hotkey F{i}: {hex_preview} ({len(line_data)} bytes)")
+            for i, payload in loaded.items():
+                if not payload:
+                    continue
+                # Auto-RETURN am Ende (mehrzeilige Hotkeys: interne CRs bleiben)
+                line_data = payload + b'\r'
+                self.hotkeys[i] = line_data
+                
+                hex_preview = ' '.join(f'{b:02X}' for b in payload[:20])
+                if len(payload) > 20:
+                    hex_preview += '...'
+                debug_print(f"Hotkey F{i}: {hex_preview} ({len(line_data)} bytes)")
             
             debug_print(f"Loaded {len(self.hotkeys)} hotkeys from {hotkey_file}")
             
