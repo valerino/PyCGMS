@@ -1,6 +1,6 @@
-
+#!/usr/bin/env python3
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog, scrolledtext
+from tkinter import ttk, messagebox, filedialog, scrolledtext, simpledialog
 import json
 import threading
 import time
@@ -4167,6 +4167,7 @@ class BBSTerminal(tk.Tk):
         
         # Protocol aus Config laden (Default: TurboModem)
         saved_protocol = self.settings.get('transfer_protocol', 'TurboModem')
+
         self.current_protocol = TransferProtocol.TURBOMODEM  # Default
         for proto in TransferProtocol:
             if proto.value == saved_protocol:
@@ -4368,6 +4369,10 @@ class BBSTerminal(tk.Tk):
         transfer_menu.add_command(label="Download (F3)", command=self.show_download)
         transfer_menu.add_separator()
         transfer_menu.add_command(label="Cycle Protocol (Alt+P)", command=self.cycle_protocol)
+        transfer_menu.add_command(label="Punter Connection Timeout...", command=self.set_punter_connection_timeout)
+        self.use_multi_punter_var = tk.BooleanVar(value=self.settings.get('use_multi_punter', False))
+        transfer_menu.add_checkbutton(label="Use Multi-Punter", variable=self.use_multi_punter_var,
+                                      command=self.toggle_use_multi_punter)
         transfer_menu.add_command(label="Settings (F5)", command=self.show_settings)
         
         # Server
@@ -5229,6 +5234,7 @@ class BBSTerminal(tk.Tk):
             log_dir = self.settings.get('download_folder', os.path.dirname(os.path.abspath(__file__)))
             
             transfer = FileTransfer(self.bbs_connection.client, self.current_protocol, speed_profile, log_dir=log_dir, debug=transfer_debug)
+            transfer.use_multi_punter = self.settings.get('use_multi_punter', False)
             
             # Setze FileTransfer-Referenz für Live-Updates (alle Transfers)
             progress.file_transfer = transfer
@@ -5304,7 +5310,8 @@ class BBSTerminal(tk.Tk):
                                   progress.update_progress(d, t, s, fn))
             
             try:
-                success = transfer.receive_file(filepath, callback)
+                punter_connection_timeout = self.settings.get('punter_connection_timeout')
+                success = transfer.receive_file(filepath, callback, connection_timeout=punter_connection_timeout)
             except Exception as e:
                 transfer.log(f"EXCEPTION in receive_file: {e}")
                 import traceback
@@ -5745,6 +5752,33 @@ class BBSTerminal(tk.Tk):
         self.screen.cursor_y = 14  # Unter "WAITING FOR CONNECTION..."
         
         self.render_display()
+    
+    def set_punter_connection_timeout(self):
+        """Set 'punter_connection_timeout' (Sekunden) und speichert es in der Config."""
+        current = self.settings.get('punter_connection_timeout')
+        default = current if isinstance(current, int) else 30
+        if default < 30:
+            default = 30
+        value = simpledialog.askinteger(
+            "Punter Connection Timeout",
+            "Timeout (in seconds) before dropping connection during Punter downloads.\n"
+            "Default: " + str(default)+"s",
+            parent=self,
+            initialvalue=default,
+            minvalue=30)
+        if value is None:
+            # unchanged
+            value = default
+        self.settings['punter_connection_timeout'] = value
+        self.save_config()
+        debug_print(f"Punter connection timeout set to: {value}")
+    
+    def toggle_use_multi_punter(self):
+        """Schaltet den Multi-Punter Batch-Modus um und speichert die Config."""
+        enabled = self.use_multi_punter_var.get()
+        self.settings['use_multi_punter'] = enabled
+        self.save_config()
+        debug_print(f"Multi-Punter mode {'enabled' if enabled else 'disabled'}")
     
     def show_settings(self):
         """F5 - Settings"""
@@ -6993,6 +7027,8 @@ class BBSTerminal(tk.Tk):
                     config.setdefault('local_echo', False)
                     config.setdefault('use_day_folders', False)
                     config.setdefault('window_geometry', '')
+                    config.setdefault('punter_connection_timeout', None)
+                    config.setdefault('use_multi_punter', False)
                     return config
         except:
             pass
@@ -7005,7 +7041,8 @@ class BBSTerminal(tk.Tk):
             'connection_mode': 'ip',
             'serial_port': '',
             'serial_baudrate': 9600,
-            'local_echo': False
+            'local_echo': False,
+            'use_multi_punter': False
         }
     
     def get_day_folder(self, base_dir, for_upload=False):

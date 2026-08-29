@@ -112,6 +112,9 @@ class FileTransfer:
         
         # TurboModem Multi-File Support
         self.turbomodem_received_files = []
+        
+        # Multi-Punter Modus (standard: Single-File)
+        self.use_multi_punter = False
     
     def set_live_callback(self, callback):
         """
@@ -388,14 +391,14 @@ class FileTransfer:
             else:
                 raise ValueError(f"Unbekanntes Protokoll: {self.protocol}")
     
-    def receive_file(self, filepath, callback=None):
+    def receive_file(self, filepath, callback=None, connection_timeout=None):
         """
         Empfängt Datei mit gewähltem Protokoll
         
         Args:
             filepath: Pfad zum Speichern (bei Punter: kann Verzeichnis sein)
             callback: Optional - Funktion(bytes_received, status_msg)
-        
+            connection_timeout: Optionsl - Connection timeout in seconds (only used for punter)
         Returns:
             True bei Erfolg, False bei Fehler
             
@@ -407,7 +410,7 @@ class FileTransfer:
         self.log(f"\n>>> receive_file() called")
         self.log(f"    filepath: {filepath}")
         self.log(f"    protocol: {self.protocol}")
-        
+
         # Reset last received filepath
         self.last_received_filepath = None
         
@@ -421,7 +424,7 @@ class FileTransfer:
             elif self.protocol in [TransferProtocol.PUNTER, TransferProtocol.PUNTER_MULTI]:
                 # Beide Punter-Varianten verwenden Header
                 self.log("    -> routing to _punter_receive()")
-                return self._punter_receive(filepath, callback)
+                return self._punter_receive(filepath, callback, connection_timeout)
             elif self.protocol == TransferProtocol.TURBOMODEM:
                 # TurboModem gibt (success, files_list) zurück für Multi-File Support
                 success, received_files = self._turbomodem_receive(filepath, callback)
@@ -2027,7 +2030,7 @@ class FileTransfer:
         
         return success
     
-    def _punter_receive(self, filepath, callback=None):
+    def _punter_receive(self, filepath, callback=None, connection_timeout=None):
         """
         Punter C1 Receive - Empfängt eine oder mehrere Dateien
         
@@ -2045,7 +2048,11 @@ class FileTransfer:
         self.log(f"\n{'='*60}")
         self.log(f"PUNTER C1 RECEIVE: {filepath}")
         self.log(f"{'='*60}")
-        
+        if not connection_timeout:
+            # set default
+            connection_timeout=30
+        self.log(f"PUNTER C1 RECEIVE: Connection timeout: {connection_timeout}s")
+
         # Debug: Connection info
         self.log(f"Connection type: {type(self.connection)}")
         if hasattr(self.connection, 'connected'):
@@ -2072,6 +2079,7 @@ class FileTransfer:
         
         file_count = 0
         target_dir = filepath if os.path.isdir(filepath) else os.path.dirname(filepath)
+        is_multi = self.use_multi_punter or (self.protocol == TransferProtocol.PUNTER_MULTI)
         
         try:
             if callback:
@@ -2085,6 +2093,19 @@ class FileTransfer:
             time.sleep(0.2)
             self._punter_send_code(self.PUNTER_GOO)
             
+            if not is_multi:
+                # Single-File Punter.
+                self.log("Single-file Punter - starting transfer without header")
+                if os.path.isdir(filepath):
+                    current_filepath = os.path.join(filepath, f"download_{int(time.time())}.PRG")
+                else:
+                    current_filepath = filepath
+                success = self._punter_receive_after_header(current_filepath, callback)
+                if success:
+                    file_count += 1
+                    self.log(f"\n✓ File {file_count} received: {current_filepath}")
+                return file_count > 0
+            
             # Loop für mehrere Dateien (Multi-Punter)
             while True:
                 if callback:
@@ -2092,12 +2113,12 @@ class FileTransfer:
                 
                 # Warte auf Header vom BBS (10×TAB + filename,type + CR)
                 self.log("Waiting for file header (10xTAB + filename,type + CR)...")
-                header = self._punter_wait_for_header(timeout=30)
+                header = self._punter_wait_for_header(timeout=connection_timeout)
                 
                 if header is None:
                     if file_count == 0:
                         self.log("ERROR: No header received")
-                        self.log("TIP: Press F3 IMMEDIATELY when BBS shows 'Start Transfer'")
+                        self.log("TIP: Press F3 IMMEDIATELY when BBS shows 'Start Transfer', or increase 'punter_connection_timeout'")
                         return False
                     else:
                         self.log(f"No more headers - transfer complete ({file_count} files)")
@@ -2122,6 +2143,8 @@ class FileTransfer:
                     if success:
                         file_count += 1
                         self.log(f"\n✓ File {file_count} received: {current_filepath}")
+                    if not is_multi:
+                        break
                     continue
                 
                 filename, ftype = header
@@ -2153,6 +2176,10 @@ class FileTransfer:
                 if success:
                     file_count += 1
                     self.log(f"\n✓ File {file_count} received: {current_filepath}")
+                    
+                    if not is_multi:
+                        self.log("Single-file Punter - not waiting for more files")
+                        break
                     
                     # Nach erfolgreichem Download: Prüfen ob weitere Files kommen
                     # Sende GOO um dem BBS zu signalisieren dass wir bereit für mehr sind
@@ -2240,7 +2267,7 @@ class FileTransfer:
             max_retries = 3
             block1 = None
             for retry in range(max_retries):
-                block1 = self._punter_receive_block(timeout=15)
+                block1 = self._punter_receive_block(timeout=15, expected_size=8)
                 if block1 is not None:
                     break  # Erfolg!
                 
@@ -2332,7 +2359,7 @@ class FileTransfer:
             # Empfange Block2 (8 Bytes) - mit Retry bei Checksum-Fehler
             block2 = None
             for retry in range(max_retries):
-                block2 = self._punter_receive_block(timeout=15)
+                block2 = self._punter_receive_block(timeout=15, expected_size=7)
                 if block2 is not None:
                     break  # Erfolg!
                 
@@ -2535,11 +2562,12 @@ class FileTransfer:
         self.punter_log(f"    Block header parsed: add={additive:04X} cyc={cyclic:04X} next={next_size} idx={block_index:04X} last={is_last}")
         
         # Bestimme wie viele Bytes wir lesen müssen
-        if expected_size is not None and expected_size > 7:
-            # Verwende expected_size aus vorherigem Block
+        if expected_size is not None:
+            # Fest vorgegebene Größe: Type-Block = 8, Dummy-Block = 7,
+            # Datenblöcke = next_size aus vorherigem Block
             target_size = expected_size
         else:
-            # Standard: 255 bytes für Datenblöcke, 8 für Typ-Blöcke
+            # Fallback ohne Erwartung: 255 bytes für Datenblöcke, 8 für Typ-Blöcke
             target_size = 255 if next_size > 0 else 8
         
         self.punter_log(f"    [BLOCK] Target size: {target_size}, already have: {len(block_data)}")
@@ -3429,7 +3457,7 @@ class FileTransfer:
             max_retries = 3
             block1 = None
             for retry in range(max_retries):
-                block1 = self._punter_receive_block(timeout=15)
+                block1 = self._punter_receive_block(timeout=15, expected_size=8)
                 if block1 is not None:
                     break  # Erfolg!
                 
@@ -3502,7 +3530,7 @@ class FileTransfer:
             # Empfange Block2 (identisch: 8 Bytes) - mit Retry bei Checksum-Fehler
             block2 = None
             for retry in range(max_retries):
-                block2 = self._punter_receive_block(timeout=15)
+                block2 = self._punter_receive_block(timeout=15, expected_size=7)
                 if block2 is not None:
                     break  # Erfolg!
                 
