@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog, scrolledtext, simpledialog
+from tkinter import ttk, messagebox, filedialog, scrolledtext
 import json
 import threading
 import time
@@ -28,7 +28,7 @@ except ImportError:
         pass
 from c64_keyboard import get_petscii_for_key, is_printable_key
 from file_transfer import FileTransfer, TransferProtocol
-from terminal_extensions import ScrollbackBuffer, ScrollbackViewer
+from terminal_extensions import ScrollbackBuffer, ScrollbackViewer, TextSelectionMixin
 
 # Version (single source of truth)
 PYCGMS_VERSION = "1.2"
@@ -1504,7 +1504,7 @@ class SettingsDialog(tk.Toplevel):
                  font=('Arial', 8, 'italic')).pack(anchor=tk.W)
         ttk.Label(proto_frame, text="📡 ZModem: Standard BBS protocol (auto-download)", 
                  font=('Arial', 8, 'italic')).pack(anchor=tk.W)
-        ttk.Label(proto_frame, text="📦 Punter C1: Multi-File Downloads (C64 BBS)", 
+        ttk.Label(proto_frame, text="📦 Punter C1: Single and Multi-File Downloads (C64 BBS)", 
                  font=('Arial', 8, 'italic')).pack(anchor=tk.W)
         ttk.Label(proto_frame, text="💡 YModem: Batch Transfer with filenames", 
                  font=('Arial', 8, 'italic')).pack(anchor=tk.W)
@@ -1609,6 +1609,30 @@ class SettingsDialog(tk.Toplevel):
         
         ttk.Label(debug_frame, text="💡 Waiting indicator and CTRL+X always available", 
                  font=('Arial', 8, 'italic')).pack(anchor=tk.W, pady=(5, 0))
+        
+        # Punter Einstellungen
+        punter_frame = ttk.LabelFrame(right_col, text="Punter", padding=10)
+        punter_frame.pack(fill=tk.X, pady=5)
+        
+        current_punter_timeout = parent.settings.get('punter_connection_timeout')
+        punter_timeout = current_punter_timeout if isinstance(current_punter_timeout, int) else 30
+        if punter_timeout < 30:
+            punter_timeout = 30
+        self.punter_timeout_var = tk.IntVar(value=punter_timeout)
+        
+        timeout_row = ttk.Frame(punter_frame)
+        timeout_row.pack(fill=tk.X, pady=2)
+        ttk.Label(timeout_row, text="Connection Timeout (s):", font=('Arial', 9)).pack(side=tk.LEFT)
+        ttk.Spinbox(timeout_row, from_=30, to=600, increment=10, width=6,
+                    textvariable=self.punter_timeout_var).pack(side=tk.LEFT, padx=5)
+        
+        self.multi_punter_var = tk.BooleanVar(value=parent.settings.get('use_multi_punter', False))
+        ttk.Label(punter_frame, text="💡 Timeout before file header arrives\n (Multi-Punter only)", 
+                         font=('Arial', 8, 'italic')).pack(anchor=tk.W, pady=(3, 0))
+        ttk.Checkbutton(punter_frame, text="Use Multi-Punter (batch download)",
+                        variable=self.multi_punter_var).pack(anchor=tk.W, pady=(3, 0))
+        ttk.Label(punter_frame, text="📦 Multi-Punter allows downloading multiple files,\n waits for header before each file", 
+                 font=('Arial', 8, 'italic')).pack(anchor=tk.W)
         
         # Transfer Folders
         folders_frame = ttk.LabelFrame(right_col, text="Transfer Folders", padding=10)
@@ -1728,7 +1752,7 @@ class SettingsDialog(tk.Toplevel):
         self.update_idletasks()
         
         # Set geometry - wider layout, adequate height for all options
-        self.geometry("620x860")
+        self.geometry("620x960")
         
         # Center dialog
         self.update_idletasks()
@@ -1846,7 +1870,9 @@ class SettingsDialog(tk.Toplevel):
                     'transfer_debug': self.transfer_debug_var.get(),
                     'connection_mode': self.conn_mode_var.get(),
                     'serial_port': self.comport_var.get(),
-                    'serial_baudrate': baudrate
+                    'serial_baudrate': baudrate,
+                    'punter_connection_timeout': self.punter_timeout_var.get(),
+                    'use_multi_punter': self.multi_punter_var.get()
                 }
                 break
         self.destroy()
@@ -4143,7 +4169,7 @@ def get_available_comports():
     return sorted(ports, key=lambda p: p.device)
 
 
-class BBSTerminal(tk.Tk):
+class BBSTerminal(TextSelectionMixin, tk.Tk):
     """Hauptanwendung mit allen Features"""
     
     def __init__(self):
@@ -4323,6 +4349,11 @@ class BBSTerminal(tk.Tk):
         self.canvas = tk.Canvas(self, bg='black', highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True, side=tk.TOP)
         
+        # text selection on right click
+        self._sel_start = None  # (col, row)
+        self._sel_end = None    # (col, row)
+        self._sel_moved = False
+        
         # Status Bar
         status_frame = ttk.Frame(self)
         status_frame.pack(fill=tk.X, side=tk.BOTTOM)
@@ -4369,10 +4400,6 @@ class BBSTerminal(tk.Tk):
         transfer_menu.add_command(label="Download (F3)", command=self.show_download)
         transfer_menu.add_separator()
         transfer_menu.add_command(label="Cycle Protocol (Alt+P)", command=self.cycle_protocol)
-        transfer_menu.add_command(label="Punter Connection Timeout...", command=self.set_punter_connection_timeout)
-        self.use_multi_punter_var = tk.BooleanVar(value=self.settings.get('use_multi_punter', False))
-        transfer_menu.add_checkbutton(label="Use Multi-Punter", variable=self.use_multi_punter_var,
-                                      command=self.toggle_use_multi_punter)
         transfer_menu.add_command(label="Settings (F5)", command=self.show_settings)
         
         # Server
@@ -4436,6 +4463,12 @@ class BBSTerminal(tk.Tk):
         self.bind("<Alt-c>", lambda e: self.toggle_comport())  # COM Port Toggle
         self.bind("<Alt-C>", lambda e: self.toggle_comport())  # COM Port Toggle (Shift)
         self.bind("<F12>", lambda e: self.toggle_traffic_logger())
+        
+        # handle text selection/copy
+        self.canvas.bind("<ButtonPress-1>", self._on_sel_press)
+        self.canvas.bind("<B1-Motion>", self._on_sel_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._on_sel_release)
+        self.canvas.bind("<Button-3>", self._on_copy_click)
         
         # Traffic Logger State
         self.traffic_logger_active = False
@@ -5753,33 +5786,6 @@ class BBSTerminal(tk.Tk):
         
         self.render_display()
     
-    def set_punter_connection_timeout(self):
-        """Set 'punter_connection_timeout' (Sekunden) und speichert es in der Config."""
-        current = self.settings.get('punter_connection_timeout')
-        default = current if isinstance(current, int) else 30
-        if default < 30:
-            default = 30
-        value = simpledialog.askinteger(
-            "Punter Connection Timeout",
-            "Timeout (in seconds) before dropping connection during Punter downloads.\n"
-            "Default: " + str(default)+"s",
-            parent=self,
-            initialvalue=default,
-            minvalue=30)
-        if value is None:
-            # unchanged
-            value = default
-        self.settings['punter_connection_timeout'] = value
-        self.save_config()
-        debug_print(f"Punter connection timeout set to: {value}")
-    
-    def toggle_use_multi_punter(self):
-        """Schaltet den Multi-Punter Batch-Modus um und speichert die Config."""
-        enabled = self.use_multi_punter_var.get()
-        self.settings['use_multi_punter'] = enabled
-        self.save_config()
-        debug_print(f"Multi-Punter mode {'enabled' if enabled else 'disabled'}")
-    
     def show_settings(self):
         """F5 - Settings"""
         # Übergebe width als config-value: 81 für Amiga, sonst screen_width
@@ -5875,6 +5881,17 @@ class BBSTerminal(tk.Tk):
                     set_telnet_debug(new_debug)  # Also update telnet client debug
                     state = "enabled" if new_debug else "disabled"
                     print(f"Transfer debug mode {state}")
+            
+            # Punter timeout and multi-download preferences
+            if 'punter_connection_timeout' in dialog.result:
+                self.settings['punter_connection_timeout'] = dialog.result['punter_connection_timeout']
+                self.save_config()
+                debug_print(f"Punter connection timeout set to: {dialog.result['punter_connection_timeout']}")
+            
+            if 'use_multi_punter' in dialog.result:
+                self.settings['use_multi_punter'] = dialog.result['use_multi_punter']
+                self.save_config()
+                debug_print(f"Multi-Punter mode {'enabled' if dialog.result['use_multi_punter'] else 'disabled'}")
             
             # Amiga Height speichern
             if 'amiga_height' in dialog.result:
@@ -7724,6 +7741,9 @@ class BBSTerminal(tk.Tk):
             if not self.amiga_mode:
                 self.draw_terminal_cursor(x, y)
             
+            # draw the selection box
+            self._draw_selection()
+            
         except Exception as e:
             print(f"Render error: {e}")
     
@@ -7793,6 +7813,66 @@ class BBSTerminal(tk.Tk):
                 outline='',  # No outline
                 tags='cursor'
             )
+    
+    def _get_char_metrics(self):
+        """Returns (offset_x, offset_y, char_width, char_height) for Canvas→Cell Mapping."""
+        zoom = self.renderer.zoom
+        char_w = 8 * zoom
+        char_h = 8 * zoom
+        canvas_w = self.last_canvas_width if self.last_canvas_width > 0 else self.canvas.winfo_width()
+        canvas_h = self.last_canvas_height if self.last_canvas_height > 0 else self.canvas.winfo_height()
+        
+        if self.amiga_mode and canvas_w > 100 and canvas_h > 100:
+            # use amiga-mode char metrics
+            return 0, 0, canvas_w / self.screen_width, canvas_h / self.screen_height
+        
+        img_w = self.screen_width * char_w
+        img_h = self.screen_height * char_h
+        offset_x = max(0, (canvas_w - img_w) // 2)
+        offset_y = max(0, (canvas_h - img_h) // 2)
+        return offset_x, offset_y, char_w, char_h
+    
+    def _canvas_to_cell(self, event):
+        """Converts Canvas coordinates to Screen cell (col, row)."""
+        try:
+            off_x, off_y, char_w, char_h = self._get_char_metrics()
+            col = int((event.x - off_x) / char_w)
+            row = int((event.y - off_y) / char_h)
+            col = max(0, min(self.screen_width - 1, col))
+            row = max(0, min(self.screen_height - 1, row))
+            return col, row
+        except Exception:
+            return 0, 0
+    
+    def _draw_selection(self):
+        """draws the selection overlay (rectangle over selected cells)."""
+        self.canvas.delete('selection')
+        if not self._sel_start or not self._sel_end:
+            return
+        try:
+            (c1, r1), (c2, r2) = self._sel_start, self._sel_end
+            left, right = min(c1, c2), max(c1, c2)
+            top, bottom = min(r1, r2), max(r1, r2)
+            off_x, off_y, char_w, char_h = self._get_char_metrics()
+            x1 = off_x + left * char_w
+            y1 = off_y + top * char_h
+            x2 = off_x + (right + 1) * char_w
+            y2 = off_y + (bottom + 1) * char_h
+            self.canvas.create_rectangle(
+                x1, y1, x2, y2,
+                outline='#FFFFFF', width=1,
+                fill='#4080FF', stipple='gray50',
+                tags='selection'
+            )
+        except Exception as e:
+            debug_print(f"Selection draw error: {e}")
+    
+    def _show_copy_message(self, msg):
+        """ signal a copy happened and show a message """
+        if self.connected:
+            self.update_status_connected(msg)
+        else:
+            self.update_status(msg)
     
     def animate_terminal_cursor(self):
         """Animiert blinkenden Terminal-Cursor"""

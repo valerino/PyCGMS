@@ -2163,7 +2163,10 @@ class FileTransfer:
                     if '.' not in safe_filename:  # Nur wenn keine Endung vorhanden
                         safe_filename = safe_filename + ext
                         self.log(f"    Added extension: {safe_filename}")
-                
+
+                # enforce lowercase when saving
+                safe_filename = safe_filename.lower()
+
                 # Ziel-Pfad
                 if os.path.isdir(filepath):
                     current_filepath = os.path.join(filepath, safe_filename)
