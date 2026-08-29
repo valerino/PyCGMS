@@ -7,6 +7,9 @@ import time
 import os
 import socket
 import queue
+import urllib.request
+import re
+import html
 from PIL import Image, ImageTk
 
 # Serial port support (optional)
@@ -740,6 +743,7 @@ class BBSDialDialog(tk.Toplevel):
         ttk.Button(toolbar, text="➕ New", command=self.new_entry, width=10).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="✏️ Edit", command=self.edit_entry, width=10).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="🗑️ Delete", command=self.delete_entry, width=10).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="⬇️ Download C64 BBS List", command=self.download_c64_list).pack(side=tk.LEFT, padx=2)
         
         # Listbox
         list_frame = ttk.Frame(left_frame)
@@ -1112,6 +1116,58 @@ class BBSDialDialog(tk.Toplevel):
             del self.bbs_list[idx]
             self.save_bbs_list()
             self.refresh_listbox()
+    
+    def download_c64_list(self):
+        """Lädt online C64 BBS Liste von commodoregames.net und fügt sie hinzu"""
+        url = "https://www.commodoregames.net/c64-bbs-pinger/index.php"
+        try:
+            with urllib.request.urlopen(url, timeout=20) as resp:
+                page = resp.read().decode('utf-8', errors='replace')
+        except Exception as e:
+            messagebox.showerror("Download Failed", f"Could not fetch BBS list:\n{e}")
+            return
+        
+        existing = {(b.get('host'), b.get('port')) for b in self.bbs_list}
+        added = 0
+        skipped = 0
+        
+        for row in re.findall(r'<tr>(.*?)</tr>', page, re.S):
+            if 'bg-success' not in row:  # nur online BBS
+                continue
+            host_m = re.search(r'<code[^>]*>(.*?)</code>', row, re.S)
+            if not host_m:
+                continue
+            host = html.unescape(host_m.group(1)).strip()
+            port_m = re.search(r'</code>\s*</td>\s*<td>(.*?)</td>', row, re.S)
+            port = int(html.unescape(port_m.group(1)).strip()) if port_m else 23
+            name_m = re.search(r'<td>(.*?)</td>', row, re.S)
+            name = html.unescape(name_m.group(1)).strip() if name_m else host
+            
+            if (host, port) in existing:
+                skipped += 1
+                continue
+            
+            self.bbs_list.append({
+                "name": name,
+                "description": "",
+                "host": host,
+                "port": port,
+                "username": "",
+                "password": "",
+                "send_delay": 100,
+                "protocol": TransferProtocol.PUNTER.value,
+                "transfer_speed": "normal",
+                "connection_mode": "ip",
+                "emulation": "C64 40col",
+            })
+            existing.add((host, port))
+            added += 1
+        
+        if added:
+            self.save_bbs_list()
+            self.refresh_listbox()
+        messagebox.showinfo("Download Complete",
+                            f"Added {added} online BBS entries.\n{skipped} duplicate entries skipped.")
     
     def load_bbs_list(self):
         """Lädt BBS Liste aus bbs_config.json"""
