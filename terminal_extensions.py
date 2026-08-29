@@ -464,7 +464,7 @@ class TextSelectionMixin:
             self._sel_end = None
             self._sel_moved = False
             self._draw_selection()
-            messagebox.showinfo("Copy", f"Copied {len(text)} characters to clipboard.", parent=self)
+            # messagebox.showinfo("Copy", f"Copied {len(text)} characters to clipboard.", parent=self)
             self._show_copy_message(f"Copied {len(text)} chars")
         except Exception as e:
             print(f"Clipboard error: {e}")

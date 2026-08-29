@@ -2359,7 +2359,7 @@ class FileTransfer:
                 # Sende S/B
                 self._punter_send_code(self.PUNTER_SB)
             
-            # Empfange Block2 (8 Bytes) - mit Retry bei Checksum-Fehler
+            # Empfange Block2 (7 Bytes) - mit Retry bei Checksum-Fehler
             block2 = None
             for retry in range(max_retries):
                 block2 = self._punter_receive_block(timeout=15, expected_size=7)
