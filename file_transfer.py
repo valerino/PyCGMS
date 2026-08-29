@@ -398,7 +398,7 @@ class FileTransfer:
         Args:
             filepath: Pfad zum Speichern (bei Punter: kann Verzeichnis sein)
             callback: Optional - Funktion(bytes_received, status_msg)
-            connection_timeout: Optionsl - Connection timeout in seconds (only used for punter)
+            connection_timeout: Optional - Connection timeout in seconds (only used for punter)
         Returns:
             True bei Erfolg, False bei Fehler
             
