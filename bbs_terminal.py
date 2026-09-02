@@ -694,84 +694,119 @@ class TransferProgressDialog(tk.Toplevel):
 
 class BBSDialDialog(tk.Toplevel):
     """BBS Dialer (F7) mit Editor und Preview-Bild"""
-    
+
     def __init__(self, parent):
         super().__init__(parent)
         self.title("BBS Dialer")
         self.geometry("950x720")
         self.result = None
         self.current_photo = None  # Für Bildanzeige
-        
+
         # Liste der BBS (aus Config oder hardcoded)
         self.bbs_list = [
             {
-                "name": "The Hidden", 
-                "host": "the-hidden.hopto.org", 
+                "name": "The Hidden",
+                "host": "the-hidden.hopto.org",
                 "port": 64128,
                 "username": "",
                 "password": "",
                 "send_delay": 100
             },
             {
-                "name": "Cottonwood", 
-                "host": "cottonwoodbbs.dyndns.org", 
+                "name": "Cottonwood",
+                "host": "cottonwoodbbs.dyndns.org",
                 "port": 6502,
                 "username": "",
                 "password": "",
                 "send_delay": 100
             }
         ]
-        
+        self.favorites = []
+
         # Versuche BBS Liste aus Config zu laden
         self.load_bbs_list()
-        
+
         # Header
         ttk.Label(self, text="📞 BBS Directory", font=('Arial', 14, 'bold')).pack(pady=10)
-        
+
         # Hauptbereich: Links Liste, Rechts Bild+Details
         main_frame = ttk.Frame(self)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
-        
-        # Linker Bereich: Toolbar + Listbox
+
+        # Linker Bereich: Toolbar + Notebook
         left_frame = ttk.Frame(main_frame)
         left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        # Toolbar über Listbox
+
+        # Toolbar über Notebook
         toolbar = ttk.Frame(left_frame)
         toolbar.pack(fill=tk.X, pady=(0, 5))
-        
+
         ttk.Button(toolbar, text="➕ New", command=self.new_entry, width=10).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="✏️ Edit", command=self.edit_entry, width=10).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="🗑️ Delete", command=self.delete_entry, width=10).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="🗑️ Delete", command=self.delete_entry).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="⬇️ Download C64 BBS List", command=self.download_c64_list).pack(side=tk.LEFT, padx=2)
-        
-        # Listbox
-        list_frame = ttk.Frame(left_frame)
-        list_frame.pack(fill=tk.BOTH, expand=True)
-        
-        scrollbar = ttk.Scrollbar(list_frame)
+        ttk.Button(toolbar, text="⬆️ Up", command=self.move_up).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="⬇️ Down", command=self.move_down).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="💾 Export JSON", command=self.export_json).pack(side=tk.LEFT, padx=2)
+
+        # Notebook with BBS List / Favorites tabs
+        self.notebook = ttk.Notebook(left_frame)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
+        tab_bbs = ttk.Frame(self.notebook)
+        tab_fav = ttk.Frame(self.notebook)
+        self.notebook.add(tab_bbs, text="BBS List")
+        self.notebook.add(tab_fav, text="Favorites")
+
+        # --- BBS List tab ---
+        bbs_frame = ttk.Frame(tab_bbs)
+        bbs_frame.pack(fill=tk.BOTH, expand=True)
+        scrollbar = ttk.Scrollbar(bbs_frame)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        self.listbox = tk.Listbox(list_frame, font=('Courier', 10), yscrollcommand=scrollbar.set,
+        self.listbox = tk.Listbox(bbs_frame, font=('Courier', 10), yscrollcommand=scrollbar.set,
                                    selectmode=tk.SINGLE, activestyle='none',
                                    selectbackground='#3399FF', selectforeground='white')
         self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.listbox.yview)
-        
         self.refresh_listbox()
-        
-        # Bindings
+
+        # --- Favorites tab ---
+        fav_frame = ttk.Frame(tab_fav)
+        fav_frame.pack(fill=tk.BOTH, expand=True)
+        fav_scrollbar = ttk.Scrollbar(fav_frame)
+        fav_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.fav_listbox = tk.Listbox(fav_frame, font=('Courier', 10), yscrollcommand=fav_scrollbar.set,
+                                       selectmode=tk.SINGLE, activestyle='none',
+                                       selectbackground='#3399FF', selectforeground='white')
+        self.fav_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        fav_scrollbar.config(command=self.fav_listbox.yview)
+        self.refresh_favorites_listbox()
+
+        # Bindings for BBS listbox
         self.listbox.bind('<<ListboxSelect>>', self.on_select)
-        self.listbox.bind('<Button-1>', self.on_click)  # Einzelklick
+        self.listbox.bind('<Button-1>', self.on_click)
         self.listbox.bind('<Double-Button-1>', lambda e: self.connect())
-        self.listbox.bind('<Button-3>', self.show_context_menu)  # Rechtsklick
-        self.listbox.bind('<MouseWheel>', self.on_mousewheel)  # Windows
-        self.listbox.bind('<Button-4>', self.on_mousewheel)  # Linux scroll up
-        self.listbox.bind('<Button-5>', self.on_mousewheel)  # Linux scroll down
+        self.listbox.bind('<Button-3>', self.show_context_menu)
+        self.listbox.bind('<MouseWheel>', self.on_mousewheel)
+        self.listbox.bind('<Button-4>', self.on_mousewheel)
+        self.listbox.bind('<Button-5>', self.on_mousewheel)
         self.listbox.bind('<Up>', self.on_arrow_key)
         self.listbox.bind('<Down>', self.on_arrow_key)
-        self.listbox.bind('<Return>', lambda e: self.connect())  # Enter = Connect
-        
+        self.listbox.bind('<Return>', lambda e: self.connect())
+
+        # Bindings for Favorites listbox
+        self.fav_listbox.bind('<<ListboxSelect>>', self.on_select)
+        self.fav_listbox.bind('<Button-1>', self.on_click_fav)
+        self.fav_listbox.bind('<Double-Button-1>', lambda e: self.connect())
+        self.fav_listbox.bind('<Button-3>', self.show_fav_context_menu)
+        self.fav_listbox.bind('<MouseWheel>', self.on_mousewheel)
+        self.fav_listbox.bind('<Button-4>', self.on_mousewheel)
+        self.fav_listbox.bind('<Button-5>', self.on_mousewheel)
+        self.fav_listbox.bind('<Up>', self.on_arrow_key)
+        self.fav_listbox.bind('<Down>', self.on_arrow_key)
+        self.fav_listbox.bind('<Return>', lambda e: self.connect())
+
+        self.notebook.bind('<<NotebookTabChanged>>', self.on_tab_changed)
+
         # Hotkeys: 1-9, A-Z
         for i in range(1, 10):  # 1-9
             self.bind(str(i), lambda e, idx=i-1: self.hotkey_connect(idx))
@@ -779,36 +814,55 @@ class BBSDialDialog(tk.Toplevel):
             idx = 9 + (ord(c) - ord('A'))  # A=9, B=10, etc.
             self.bind(c.lower(), lambda e, idx=idx: self.hotkey_connect(idx))
             self.bind(c.upper(), lambda e, idx=idx: self.hotkey_connect(idx))
-        
-        # Context Menu
+
+        # Context Menu for BBS List (includes Copy to Favorites)
         self.context_menu = tk.Menu(self, tearoff=0)
+        self.context_menu.add_command(label="📋 Copy to Favorites", command=self.copy_to_favorites)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="⬆️ Move Up", command=self.move_up)
+        self.context_menu.add_command(label="⬇️ Move Down", command=self.move_down)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="💾 Export JSON", command=self.export_json)
+        self.context_menu.add_separator()
         self.context_menu.add_command(label="✏️ Edit Entry", command=self.edit_entry)
         self.context_menu.add_command(label="🗑️ Delete Entry", command=self.delete_entry)
         self.context_menu.add_separator()
         self.context_menu.add_command(label="➕ New Entry", command=self.new_entry)
-        
+
+        # Context Menu for Favorites
+        self.fav_context_menu = tk.Menu(self, tearoff=0)
+        self.fav_context_menu.add_command(label="⬆️ Move Up", command=self.move_up)
+        self.fav_context_menu.add_command(label="⬇️ Move Down", command=self.move_down)
+        self.fav_context_menu.add_separator()
+        self.fav_context_menu.add_command(label="💾 Export JSON", command=self.export_json)
+        self.fav_context_menu.add_separator()
+        self.fav_context_menu.add_command(label="🗑️ Remove from Favorites", command=self.remove_from_favorites)
+        self.fav_context_menu.add_separator()
+        self.fav_context_menu.add_command(label="✏️ Edit Entry", command=self.edit_entry)
+        self.fav_context_menu.add_command(label="➕ New Entry", command=self.new_entry)
+
         # Rechter Bereich: Bild + Details
         right_frame = ttk.Frame(main_frame, width=400)
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=(10, 0))
         right_frame.pack_propagate(False)
-        
+
         # Preview-Bild Frame
         preview_frame = ttk.LabelFrame(right_frame, text="BBS Preview", padding=5)
         preview_frame.pack(fill=tk.X, pady=(0, 10))
-        
+
         # Canvas für Bild (384x272 oder kleiner)
         self.preview_canvas = tk.Canvas(preview_frame, width=384, height=272, bg='#000000',
                                          highlightthickness=1, highlightbackground='#333333')
         self.preview_canvas.pack(pady=5)
-        
+
         # Placeholder Text
-        self.preview_canvas.create_text(192, 136, text="No Preview", fill='#666666', 
+        self.preview_canvas.create_text(192, 136, text="No Preview", fill='#666666',
                                         font=('Arial', 12), tags='placeholder')
-        
+
         # Details Frame (read-only anzeige)
         details_frame = ttk.LabelFrame(right_frame, text="Selected BBS Details", padding=10)
         details_frame.pack(fill=tk.X)
-        
+
         # Grid für Details
         self.detail_labels = {}
         labels = [
@@ -821,19 +875,19 @@ class BBSDialDialog(tk.Toplevel):
             ('Speed:', 'speed_label'),
             ('Connection:', 'connection_label')
         ]
-        
+
         for row, (label_text, var_name) in enumerate(labels):
             ttk.Label(details_frame, text=label_text).grid(row=row, column=0, sticky=tk.W, padx=5, pady=2)
             label = ttk.Label(details_frame, text="-", foreground='blue')
             label.grid(row=row, column=1, sticky=tk.W, padx=5, pady=2)
             self.detail_labels[var_name] = label
-        
+
         # Info Label
         info_frame = ttk.Frame(self)
         info_frame.pack(fill=tk.X, padx=10, pady=5)
-        ttk.Label(info_frame, text="💡 Hotkeys: 1-9, A-Z | Double-click = Connect | Right-click = Edit/Delete | Scroll = Navigate", 
+        ttk.Label(info_frame, text="💡 Hotkeys: 1-9, A-Z | Double-click = Connect | Right-click = Copy to Favorites | Scroll = Navigate",
                  font=('Arial', 9, 'italic')).pack(anchor=tk.W)
-        
+
         # Connection Mode Info (globaler Default)
         conn_mode = parent.connection_mode if hasattr(parent, 'connection_mode') else 'ip'
         if conn_mode == 'comport':
@@ -844,279 +898,408 @@ class BBSDialDialog(tk.Toplevel):
         else:
             conn_info = "🌐 Global Default: IP Dialer (TCP/Telnet)"
             conn_fg = 'gray'
-        
+
         ttk.Label(info_frame, text=conn_info, font=('Arial', 9), foreground=conn_fg).pack(anchor=tk.W)
-        
+
         # Buttons
         button_frame = ttk.Frame(self)
         button_frame.pack(pady=10)
-        
+
         ttk.Button(button_frame, text="Connect", command=self.connect, width=12).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Cancel", command=self.destroy, width=12).pack(side=tk.LEFT)
-        
+
         self.transient(parent)
         self.grab_set()
         self.focus_set()  # WICHTIG: Setze Focus für Hotkeys!
         self.listbox.focus_set()  # Focus auf Listbox für Scrolling
-        
+
         # Selektiere ersten Eintrag
         if self.bbs_list:
             self.listbox.selection_set(0)
             self.listbox.activate(0)
             self.on_select(None)
-        
+
         # Zentriere Dialog auf Parent
         self.update_idletasks()
         x = parent.winfo_x() + (parent.winfo_width() // 2) - (self.winfo_width() // 2)
         y = parent.winfo_y() + (parent.winfo_height() // 2) - (self.winfo_height() // 2)
         self.geometry(f"+{x}+{y}")
-    
+
+    def _active_listbox(self):
+        """Return listbox of currently selected tab."""
+        try:
+            idx = self.notebook.index(self.notebook.select())
+        except Exception:
+            return self.listbox
+        return self.fav_listbox if idx == 1 else self.listbox
+
+    def _active_list(self):
+        try:
+            idx = self.notebook.index(self.notebook.select())
+        except Exception:
+            return self.bbs_list
+        return self.favorites if idx == 1 else self.bbs_list
+
+    def _format_entry(self, bbs, idx):
+        if idx < 9:
+            hotkey = str(idx + 1)
+        elif idx < 35:
+            hotkey = chr(ord('A') + (idx - 9))
+        else:
+            hotkey = "-"
+        username_info = f" [{bbs.get('username', '')}]" if bbs.get('username') else ""
+        emu = bbs.get('emulation', 'C64 40col')
+        emu_short = {'C64 40col': 'C64', 'C64 80col': 'C128', 'Amiga 80col': 'AMIGA'}.get(emu, emu)
+        return f"[{hotkey}] {bbs['name']:20s} {bbs['host']}:{bbs['port']}{username_info}  ({emu_short})"
+
     def refresh_listbox(self):
-        """Aktualisiert die Listbox mit Hotkey-Nummern"""
+        """Aktualisiert die BBS Listbox mit Hotkey-Nummern"""
         self.listbox.delete(0, tk.END)
         for idx, bbs in enumerate(self.bbs_list):
-            # Hotkey: 1-9, dann A-Z
-            if idx < 9:
-                hotkey = str(idx + 1)
-            elif idx < 35:
-                hotkey = chr(ord('A') + (idx - 9))
-            else:
-                hotkey = "-"
-            
-            username_info = f" [{bbs.get('username', '')}]" if bbs.get('username') else ""
-            emu = bbs.get('emulation', 'C64 40col')
-            emu_short = {'C64 40col': 'C64', 'C64 80col': 'C128', 'Amiga 80col': 'AMIGA'}.get(emu, emu)
-            self.listbox.insert(tk.END, f"[{hotkey}] {bbs['name']:20s} {bbs['host']}:{bbs['port']}{username_info}  ({emu_short})")
-    
+            self.listbox.insert(tk.END, self._format_entry(bbs, idx))
+
+    def refresh_favorites_listbox(self):
+        """Aktualisiert die Favorites Listbox"""
+        if not hasattr(self, 'fav_listbox'):
+            return
+        self.fav_listbox.delete(0, tk.END)
+        for idx, bbs in enumerate(self.favorites):
+            self.fav_listbox.insert(tk.END, self._format_entry(bbs, idx))
+
+    def on_tab_changed(self, event=None):
+        self.on_select(None)
+
     def on_click(self, event):
-        """Einzelklick - Wählt Eintrag aus und zeigt Details"""
+        """Einzelklick - Wählt Eintrag aus und zeigt Details (BBS List)"""
         index = self.listbox.nearest(event.y)
         if 0 <= index < len(self.bbs_list):
             self.listbox.selection_clear(0, tk.END)
             self.listbox.selection_set(index)
             self.listbox.activate(index)
+            # clear fav selection so active tab logic stays clear
+            if hasattr(self, 'fav_listbox'):
+                self.fav_listbox.selection_clear(0, tk.END)
             self.on_select(None)
-    
+
+    def on_click_fav(self, event):
+        """Einzelklick - Wählt Eintrag aus (Favorites)"""
+        index = self.fav_listbox.nearest(event.y)
+        if 0 <= index < len(self.favorites):
+            self.fav_listbox.selection_clear(0, tk.END)
+            self.fav_listbox.selection_set(index)
+            self.fav_listbox.activate(index)
+            self.listbox.selection_clear(0, tk.END)
+            self.on_select(None)
+
     def on_mousewheel(self, event):
-        """Mausrad - Navigiert durch Einträge"""
-        if not self.bbs_list:
+        """Mausrad - Navigiert durch Einträge (active tab)"""
+        lb = self._active_listbox()
+        lst = self._active_list()
+        if not lst:
             return
-        
-        # Bestimme Scroll-Richtung
         if event.num == 5 or event.delta < 0:  # Scroll down
             delta = 1
         elif event.num == 4 or event.delta > 0:  # Scroll up
             delta = -1
         else:
             return
-        
-        # Hole aktuelle Selektion
-        selection = self.listbox.curselection()
+        selection = lb.curselection()
         if selection:
             current_idx = selection[0]
         else:
             current_idx = 0
-        
-        # Berechne neuen Index
-        new_idx = current_idx + delta
-        new_idx = max(0, min(new_idx, len(self.bbs_list) - 1))
-        
-        # Setze neue Selektion
-        self.listbox.selection_clear(0, tk.END)
-        self.listbox.selection_set(new_idx)
-        self.listbox.activate(new_idx)
-        self.listbox.see(new_idx)
+        new_idx = max(0, min(current_idx + delta, len(lst) - 1))
+        lb.selection_clear(0, tk.END)
+        lb.selection_set(new_idx)
+        lb.activate(new_idx)
+        lb.see(new_idx)
         self.on_select(None)
-        
-        return "break"  # Verhindere Standard-Scroll
-    
+        return "break"
+
     def on_arrow_key(self, event):
-        """Pfeiltasten - Navigiert durch Einträge"""
-        if not self.bbs_list:
+        """Pfeiltasten - Navigiert durch Einträge (active tab)"""
+        lb = self._active_listbox()
+        lst = self._active_list()
+        if not lst:
             return
-        
-        selection = self.listbox.curselection()
+        selection = lb.curselection()
         if selection:
             current_idx = selection[0]
         else:
             current_idx = 0
-        
         if event.keysym == 'Up':
             new_idx = max(0, current_idx - 1)
         elif event.keysym == 'Down':
-            new_idx = min(len(self.bbs_list) - 1, current_idx + 1)
+            new_idx = min(len(lst) - 1, current_idx + 1)
         else:
             return
-        
-        self.listbox.selection_clear(0, tk.END)
-        self.listbox.selection_set(new_idx)
-        self.listbox.activate(new_idx)
-        self.listbox.see(new_idx)
+        lb.selection_clear(0, tk.END)
+        lb.selection_set(new_idx)
+        lb.activate(new_idx)
+        lb.see(new_idx)
         self.on_select(None)
-    
+
     def load_preview_image(self, index):
         """Lädt Preview-Bild basierend auf dem Hostnamen des BBS"""
         try:
             from PIL import Image, ImageTk
             import glob
-            
-            # Hole BBS-Eintrag
-            if index < 0 or index >= len(self.bbs_list):
+            # need to know which list is active for preview; use active list
+            lst = self._active_list()
+            if index < 0 or index >= len(lst):
                 return
-            
-            bbs = self.bbs_list[index]
+            bbs = lst[index]
             hostname = bbs.get('host', '').lower()
-            
-            # Extrahiere Keywords aus Hostname
-            # z.B. "the-hidden.hopto.org" → ["the-hidden", "hidden", "the", "hopto"]
-            # z.B. "cottonwoodbbs.dyndns.org" → ["cottonwoodbbs", "cottonwood", "dyndns"]
             keywords = []
-            
-            # Erste Subdomain (vor dem ersten Punkt)
             if '.' in hostname:
                 first_part = hostname.split('.')[0]
             else:
                 first_part = hostname
-            
             keywords.append(first_part)
-            
-            # Wenn mit "the-" beginnt, auch ohne "the-" suchen
             if first_part.startswith('the-'):
                 keywords.append(first_part[4:])
-            
-            # Wenn "-bbs" am Ende, auch ohne "-bbs" suchen
             if first_part.endswith('-bbs') or first_part.endswith('bbs'):
                 if first_part.endswith('-bbs'):
                     keywords.append(first_part[:-4])
                 elif first_part.endswith('bbs') and len(first_part) > 3:
                     keywords.append(first_part[:-3])
-            
-            # Teile durch Bindestriche
             for part in first_part.split('-'):
                 if part and part not in ['the', 'bbs'] and len(part) > 2:
                     keywords.append(part)
-            
-            # Script-Verzeichnis
             script_dir = os.path.dirname(os.path.abspath(__file__))
-            
-            # Suche nach PNG-Dateien die einen Keyword enthalten
             found_image = None
             for keyword in keywords:
                 if not keyword:
                     continue
-                # Suche case-insensitive
                 pattern = os.path.join(script_dir, f"*{keyword}*.png")
                 matches = glob.glob(pattern, recursive=False)
-                
-                # Auch mit anderem Case probieren
                 if not matches:
                     pattern = os.path.join(script_dir, f"*{keyword.lower()}*.png")
                     matches = glob.glob(pattern, recursive=False)
-                
                 if not matches:
                     pattern = os.path.join(script_dir, f"*{keyword.upper()}*.png")
                     matches = glob.glob(pattern, recursive=False)
-                
                 if matches:
-                    # Nimm das erste Match
                     found_image = matches[0]
                     break
-            
             if found_image and os.path.exists(found_image):
                 img = Image.open(found_image)
-                
-                # Skaliere auf 384x272 wenn nötig
                 img = img.resize((384, 272), Image.Resampling.LANCZOS)
-                
                 self.current_photo = ImageTk.PhotoImage(img)
-                
-                # Lösche altes Bild und Placeholder
                 self.preview_canvas.delete('all')
                 self.preview_canvas.create_image(192, 136, image=self.current_photo)
             else:
-                # Kein Bild vorhanden - zeige Placeholder mit Hostname
                 self.preview_canvas.delete('all')
                 hint = f"({first_part}.png)" if first_part else "(no host)"
-                self.preview_canvas.create_text(192, 136, text=f"No Preview\n{hint}", 
-                                                fill='#666666', font=('Arial', 11), 
+                self.preview_canvas.create_text(192, 136, text=f"No Preview\n{hint}",
+                                                fill='#666666', font=('Arial', 11),
                                                 justify='center', tags='placeholder')
                 self.current_photo = None
         except Exception as e:
             debug_print(f"Error loading preview image: {e}")
             self.preview_canvas.delete('all')
-            self.preview_canvas.create_text(192, 136, text="Error loading image", 
+            self.preview_canvas.create_text(192, 136, text="Error loading image",
                                             fill='#FF6666', font=('Arial', 10), tags='placeholder')
             self.current_photo = None
-    
+
     def hotkey_connect(self, index):
-        """Verbindet mit BBS via Hotkey"""
+        """Verbindet mit BBS via Hotkey (active tab)"""
+        lst = self._active_list()
+        lb = self._active_listbox()
+        if 0 <= index < len(lst):
+            lb.selection_clear(0, tk.END)
+            lb.selection_set(index)
+            lb.see(index)
+            self.connect()
+
+    def show_context_menu(self, event):
+        """Zeigt Context Menu bei Rechtsklick (BBS List)"""
+        index = self.listbox.nearest(event.y)
         if 0 <= index < len(self.bbs_list):
             self.listbox.selection_clear(0, tk.END)
             self.listbox.selection_set(index)
-            self.listbox.see(index)
-            self.connect()
-    
-    def show_context_menu(self, event):
-        """Zeigt Context Menu bei Rechtsklick"""
-        # Selektiere Item unter Maus
-        index = self.listbox.nearest(event.y)
-        self.listbox.selection_clear(0, tk.END)
-        self.listbox.selection_set(index)
-        self.listbox.activate(index)
-        
-        # Zeige Menu
+            self.listbox.activate(index)
+            if hasattr(self, 'fav_listbox'):
+                self.fav_listbox.selection_clear(0, tk.END)
         self.context_menu.post(event.x_root, event.y_root)
-    
+
+    def show_fav_context_menu(self, event):
+        """Zeigt Context Menu bei Rechtsklick (Favorites)"""
+        index = self.fav_listbox.nearest(event.y)
+        if 0 <= index < len(self.favorites):
+            self.fav_listbox.selection_clear(0, tk.END)
+            self.fav_listbox.selection_set(index)
+            self.fav_listbox.activate(index)
+            self.listbox.selection_clear(0, tk.END)
+        self.fav_context_menu.post(event.x_root, event.y_root)
+
+    def copy_to_favorites(self):
+        """Copy selected BBS entry to Favorites (right-click -> copy)"""
+        selection = self.listbox.curselection()
+        if not selection:
+            messagebox.showinfo("No Selection", "Please select an entry from the BBS List first!")
+            return
+        idx = selection[0]
+        bbs = self.bbs_list[idx]
+        # avoid duplicates by host+port
+        for fav in self.favorites:
+            if fav.get('host') == bbs.get('host') and fav.get('port') == bbs.get('port'):
+                messagebox.showinfo("Already in Favorites", f"'{bbs['name']}' is already in Favorites.")
+                return
+        import copy
+        self.favorites.append(copy.deepcopy(bbs))
+        self.save_bbs_list()
+        self.refresh_favorites_listbox()
+        # switch to Favorites tab so user sees result
+        try:
+            self.notebook.select(1)
+        except Exception:
+            pass
+
+    def move_up(self):
+        """Move selected entry up (active tab)"""
+        lb = self._active_listbox()
+        lst = self._active_list()
+        sel = lb.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        if idx <= 0:
+            return
+        lst[idx-1], lst[idx] = lst[idx], lst[idx-1]
+        self.save_bbs_list()
+        if lst is self.bbs_list:
+            self.refresh_listbox()
+        else:
+            self.refresh_favorites_listbox()
+        lb.selection_clear(0, tk.END)
+        lb.selection_set(idx-1)
+        lb.activate(idx-1)
+        lb.see(idx-1)
+        self.on_select(None)
+
+    def move_down(self):
+        """Move selected entry down (active tab)"""
+        lb = self._active_listbox()
+        lst = self._active_list()
+        sel = lb.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        if idx >= len(lst) - 1:
+            return
+        lst[idx], lst[idx+1] = lst[idx+1], lst[idx]
+        self.save_bbs_list()
+        if lst is self.bbs_list:
+            self.refresh_listbox()
+        else:
+            self.refresh_favorites_listbox()
+        lb.selection_clear(0, tk.END)
+        lb.selection_set(idx+1)
+        lb.activate(idx+1)
+        lb.see(idx+1)
+        self.on_select(None)
+
+    def export_json(self):
+        """Export active list (BBS List or Favorites) to JSON file"""
+        lst = self._active_list()
+        is_fav = lst is self.favorites
+        if not lst:
+            messagebox.showinfo("Export", "Nothing to export - list is empty.")
+            return
+        default_name = "favorites.json" if is_fav else "bbs_list.json"
+        title = "Export Favorites" if is_fav else "Export BBS List"
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            title=title,
+            defaultextension=".json",
+            initialfile=default_name,
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
+        )
+        if not path:
+            return
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(lst, f, indent=2, ensure_ascii=False)
+            messagebox.showinfo("Export", f"Exported {len(lst)} entries to\n{path}")
+        except Exception as e:
+            messagebox.showerror("Export Failed", str(e))
+
+    def remove_from_favorites(self):
+        """Remove selected entry from Favorites"""
+        selection = self.fav_listbox.curselection()
+        if not selection:
+            messagebox.showinfo("No Selection", "Please select an entry from Favorites first!")
+            return
+        idx = selection[0]
+        bbs = self.favorites[idx]
+        if messagebox.askyesno("Remove Favorite", f"Remove '{bbs['name']}' from Favorites?"):
+            del self.favorites[idx]
+            self.save_bbs_list()
+            self.refresh_favorites_listbox()
+            self.on_select(None)
+
     def new_entry(self):
-        """Erstellt neuen BBS Eintrag"""
+        """Erstellt neuen BBS Eintrag (active tab)"""
         dialog = BBSEditDialog(self, None)
         self.wait_window(dialog)
-        
         if dialog.result:
-            self.bbs_list.append(dialog.result)
+            lst = self._active_list()
+            lb = self._active_listbox()
+            lst.append(dialog.result)
             self.save_bbs_list()
-            self.refresh_listbox()
-            # Selektiere neuen Eintrag
-            self.listbox.selection_set(len(self.bbs_list) - 1)
+            if lst is self.bbs_list:
+                self.refresh_listbox()
+            else:
+                self.refresh_favorites_listbox()
+            lb.selection_clear(0, tk.END)
+            lb.selection_set(len(lst) - 1)
+            lb.activate(len(lst) - 1)
             self.on_select(None)
-    
+
     def edit_entry(self):
-        """Editiert ausgewählten BBS Eintrag"""
-        selection = self.listbox.curselection()
+        """Editiert ausgewählten BBS Eintrag (active tab)"""
+        lb = self._active_listbox()
+        lst = self._active_list()
+        selection = lb.curselection()
         if not selection:
             messagebox.showinfo("No Selection", "Please select an entry first!")
             return
-        
         idx = selection[0]
-        bbs = self.bbs_list[idx]
-        
+        bbs = lst[idx]
         dialog = BBSEditDialog(self, bbs)
         self.wait_window(dialog)
-        
         if dialog.result:
-            self.bbs_list[idx] = dialog.result
+            lst[idx] = dialog.result
             self.save_bbs_list()
-            self.refresh_listbox()
-            # Selektiere editierten Eintrag
-            self.listbox.selection_set(idx)
+            if lst is self.bbs_list:
+                self.refresh_listbox()
+            else:
+                self.refresh_favorites_listbox()
+            lb.selection_set(idx)
+            lb.activate(idx)
             self.on_select(None)
-    
+
     def delete_entry(self):
-        """Löscht ausgewählten BBS Eintrag"""
-        selection = self.listbox.curselection()
+        """Löscht ausgewählten BBS Eintrag (active tab)"""
+        lb = self._active_listbox()
+        lst = self._active_list()
+        selection = lb.curselection()
         if not selection:
             messagebox.showinfo("No Selection", "Please select an entry first!")
             return
-        
         idx = selection[0]
-        bbs = self.bbs_list[idx]
-        
-        if messagebox.askyesno("Confirm Delete", 
+        bbs = lst[idx]
+        if messagebox.askyesno("Confirm Delete",
                                f"BBS '{bbs['name']}' wirklich löschen?"):
-            del self.bbs_list[idx]
+            del lst[idx]
             self.save_bbs_list()
-            self.refresh_listbox()
-    
+            if lst is self.bbs_list:
+                self.refresh_listbox()
+            else:
+                self.refresh_favorites_listbox()
+            self.on_select(None)
+
     def download_c64_list(self):
         """Lädt online C64 BBS Liste von commodoregames.net und fügt sie hinzu"""
         url = "https://www.commodoregames.net/c64-bbs-pinger/index.php"
@@ -1126,11 +1309,9 @@ class BBSDialDialog(tk.Toplevel):
         except Exception as e:
             messagebox.showerror("Download Failed", f"Could not fetch BBS list:\n{e}")
             return
-        
         existing = {(b.get('host'), b.get('port')) for b in self.bbs_list}
         added = 0
         skipped = 0
-        
         for row in re.findall(r'<tr>(.*?)</tr>', page, re.S):
             if 'bg-success' not in row:  # nur online BBS
                 continue
@@ -1142,11 +1323,9 @@ class BBSDialDialog(tk.Toplevel):
             port = int(html.unescape(port_m.group(1)).strip()) if port_m else 23
             name_m = re.search(r'<td>(.*?)</td>', row, re.S)
             name = html.unescape(name_m.group(1)).strip() if name_m else host
-            
             if (host, port) in existing:
                 skipped += 1
                 continue
-            
             self.bbs_list.append({
                 "name": name,
                 "description": "",
@@ -1162,25 +1341,22 @@ class BBSDialDialog(tk.Toplevel):
             })
             existing.add((host, port))
             added += 1
-        
         if added:
             self.save_bbs_list()
             self.refresh_listbox()
         messagebox.showinfo("Download Complete",
                             f"Added {added} online BBS entries.\n{skipped} duplicate entries skipped.")
-    
+
     def load_bbs_list(self):
-        """Lädt BBS Liste aus bbs_config.json"""
+        """Lädt BBS Liste und Favorites aus bbs_config.json"""
         try:
             if os.path.exists('bbs_config.json'):
                 with open('bbs_config.json', 'r', encoding='utf-8') as f:
                     config = json.load(f)
                     if 'bbs_list' in config and isinstance(config['bbs_list'], list):
-                        # Validiere jeden Eintrag
                         valid_list = []
                         for bbs in config['bbs_list']:
                             if isinstance(bbs, dict) and 'name' in bbs and 'host' in bbs:
-                                # Stelle sicher dass alle Felder existieren
                                 bbs.setdefault('description', '')
                                 bbs.setdefault('port', 23)
                                 bbs.setdefault('username', '')
@@ -1192,10 +1368,23 @@ class BBSDialDialog(tk.Toplevel):
                         if valid_list:
                             self.bbs_list = valid_list
                             debug_print(f"Loaded {len(valid_list)} BBS entries")
+                    if 'favorites' in config and isinstance(config['favorites'], list):
+                        fav_list = []
+                        for bbs in config['favorites']:
+                            if isinstance(bbs, dict) and 'name' in bbs and 'host' in bbs:
+                                bbs.setdefault('description', '')
+                                bbs.setdefault('port', 23)
+                                bbs.setdefault('username', '')
+                                bbs.setdefault('password', '')
+                                bbs.setdefault('send_delay', 100)
+                                bbs.setdefault('connection_mode', 'ip')
+                                bbs.setdefault('emulation', 'C64 40col')
+                                fav_list.append(bbs)
+                        self.favorites = fav_list
+                        debug_print(f"Loaded {len(fav_list)} favorites")
         except json.JSONDecodeError as e:
             print(f"JSON Error in bbs_config.json: {e}")
             print(f"Backing up corrupted file and using defaults")
-            # Backup der kaputten Datei
             try:
                 import shutil
                 shutil.copy('bbs_config.json', 'bbs_config.json.bak')
@@ -1203,9 +1392,9 @@ class BBSDialDialog(tk.Toplevel):
                 pass
         except Exception as e:
             print(f"Error loading BBS list: {e}")
-    
+
     def save_bbs_list(self):
-        """Speichert BBS Liste in bbs_config.json"""
+        """Speichert BBS Liste und Favorites in bbs_config.json"""
         try:
             config = {}
             if os.path.exists('bbs_config.json'):
@@ -1215,72 +1404,71 @@ class BBSDialDialog(tk.Toplevel):
                 except json.JSONDecodeError:
                     print("Warning: Existing config was corrupted, creating new one")
                     config = {}
-            
             config['bbs_list'] = self.bbs_list
-            
+            config['favorites'] = self.favorites
             with open('bbs_config.json', 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
-            
-            print(f"Saved {len(self.bbs_list)} BBS entries")
+            print(f"Saved {len(self.bbs_list)} BBS entries, {len(self.favorites)} favorites")
         except Exception as e:
             print(f"Error saving BBS list: {e}")
             import traceback
             traceback.print_exc()
-    
+
     def on_select(self, event):
-        """Wird aufgerufen wenn BBS ausgewählt wird"""
-        selection = self.listbox.curselection()
+        """Wird aufgerufen wenn BBS ausgewählt wird (active tab)"""
+        lb = self._active_listbox()
+        lst = self._active_list()
+        selection = lb.curselection()
         if selection:
             idx = selection[0]
-            bbs = self.bbs_list[idx]
-            self.detail_labels['host_label'].config(text=bbs.get('host', '-'))
-            self.detail_labels['port_label'].config(text=str(bbs.get('port', '-')))
-            self.detail_labels['username_label'].config(text=bbs.get('username', '-') or '(none)')
-            
-            # Password mit Sternchen anzeigen
-            password = bbs.get('password', '')
-            password_display = '*' * len(password) if password else '(none)'
-            self.detail_labels['password_label'].config(text=password_display)
-            
-            self.detail_labels['delay_label'].config(text=f"{bbs.get('send_delay', 100)} ms")
-            self.detail_labels['protocol_label'].config(text=bbs.get('protocol', 'TurboModem'))
-            self.detail_labels['speed_label'].config(text=bbs.get('transfer_speed', 'normal'))
-            
-            # Connection Mode anzeigen
-            conn_mode = bbs.get('connection_mode', 'ip')
-            if conn_mode == 'comport':
-                conn_text = "📡 COM-Port (ATDT)"
-            else:
-                conn_text = "🌐 IP (TCP/Telnet)"
-            self.detail_labels['connection_label'].config(text=conn_text)
-            
-            # Lade Preview-Bild
-            self.load_preview_image(idx)
-    
+            if idx < len(lst):
+                bbs = lst[idx]
+                self.detail_labels['host_label'].config(text=bbs.get('host', '-'))
+                self.detail_labels['port_label'].config(text=str(bbs.get('port', '-')))
+                self.detail_labels['username_label'].config(text=bbs.get('username', '-') or '(none)')
+                password = bbs.get('password', '')
+                password_display = '*' * len(password) if password else '(none)'
+                self.detail_labels['password_label'].config(text=password_display)
+                self.detail_labels['delay_label'].config(text=f"{bbs.get('send_delay', 100)} ms")
+                self.detail_labels['protocol_label'].config(text=bbs.get('protocol', 'TurboModem'))
+                self.detail_labels['speed_label'].config(text=bbs.get('transfer_speed', 'normal'))
+                conn_mode = bbs.get('connection_mode', 'ip')
+                if conn_mode == 'comport':
+                    conn_text = "📡 COM-Port (ATDT)"
+                else:
+                    conn_text = "🌐 IP (TCP/Telnet)"
+                self.detail_labels['connection_label'].config(text=conn_text)
+                self.load_preview_image(idx)
+                return
+        # no selection - clear
+        for key in self.detail_labels:
+            self.detail_labels[key].config(text="-")
+
     def connect(self):
-        """Verbindet mit ausgewähltem BBS"""
-        selection = self.listbox.curselection()
+        """Verbindet mit ausgewähltem BBS (active tab)"""
+        lb = self._active_listbox()
+        lst = self._active_list()
+        selection = lb.curselection()
         if not selection:
             messagebox.showinfo("No Selection", "Please select an entry first!")
             return
-        
-        bbs = self.bbs_list[selection[0]]
+        bbs = lst[selection[0]]
         if not bbs.get('host'):
             messagebox.showwarning("Invalid Entry", "This entry has no host!")
             return
-        
         self.result = {
-            'host': bbs['host'], 
+            'host': bbs['host'],
             'port': bbs['port'],
             'username': bbs.get('username', ''),
             'password': bbs.get('password', ''),
             'send_delay': bbs.get('send_delay', 100),
-            'protocol': bbs.get('protocol'),  # Protocol laden!
-            'transfer_speed': bbs.get('transfer_speed', 'normal'),  # Speed Profile laden!
-            'connection_mode': bbs.get('connection_mode', 'ip'),  # Connection Mode pro BBS!
-            'emulation': bbs.get('emulation', 'C64 40col')  # Emulation Mode!
+            'protocol': bbs.get('protocol'),
+            'transfer_speed': bbs.get('transfer_speed', 'normal'),
+            'connection_mode': bbs.get('connection_mode', 'ip'),
+            'emulation': bbs.get('emulation', 'C64 40col')
         }
         self.destroy()
+
 
 
 class BBSEditDialog(tk.Toplevel):
