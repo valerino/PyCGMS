@@ -246,7 +246,7 @@ class TransferProgressDialog(tk.Toplevel):
             self.geometry("520x380")  # Größer für alle Statistiken
         
         self.transient(parent)
-        self.grab_set()
+        # self.grab_set()
         
         # Zentriere Dialog
         self.update_idletasks()
