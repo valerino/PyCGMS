@@ -273,6 +273,10 @@ class TransferProgressDialog(tk.Toplevel):
         # CTRL+X Abbruch Button (immer verfügbar)
         self.btn_ctrlx = ttk.Button(control_frame, text="CTRL+X Abort", width=12, command=self._manual_ctrlx)
         self.btn_ctrlx.pack(side=tk.RIGHT, padx=5)
+        
+        # CTRL+X Taste beendet den Transfer (wie der Button), egal wo der Fokus ist
+        self.bind('<Control-x>', lambda e: self._manual_ctrlx())
+        self.bind('<Control-X>', lambda e: self._manual_ctrlx())
     
     def _setup_punter_debug(self):
         """Setup Punter Debug UI - Activity Log und manuelle Buttons"""
@@ -698,7 +702,7 @@ class BBSDialDialog(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("BBS Dialer")
-        self.geometry("950x720")
+        self.geometry("1100x780")
         self.result = None
         self.current_photo = None  # Für Bildanzeige
 
@@ -737,25 +741,29 @@ class BBSDialDialog(tk.Toplevel):
         left_frame = ttk.Frame(main_frame)
         left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # Toolbar über Notebook
+        # Toolbar über Notebook (zwei Reihen, damit nichts abgeschnitten wird)
         toolbar = ttk.Frame(left_frame)
         toolbar.pack(fill=tk.X, pady=(0, 5))
+        toolbar_row2 = ttk.Frame(left_frame)
+        toolbar_row2.pack(fill=tk.X, pady=(0, 5))
 
         ttk.Button(toolbar, text="➕ New", command=self.new_entry, width=10).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="✏️ Edit", command=self.edit_entry, width=10).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="🗑️ Delete", command=self.delete_entry).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="⬇️ Download C64 BBS List", command=self.download_c64_list).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="⬆️ Up", command=self.move_up).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="⬇️ Down", command=self.move_down).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="💾 Export JSON", command=self.export_json).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="🗑️ Delete", command=self.delete_entry, width=10).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="⬆️ Up", command=self.move_up, width=10).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="⬇️ Down", command=self.move_down, width=10).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="🔤 Sort", command=self.sort_list, width=10).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar_row2, text="⬇️ Download C64 BBS List", command=self.download_c64_list).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar_row2, text="💾 Export JSON", command=self.export_json).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar_row2, text="📥 Import JSON", command=self.import_json).pack(side=tk.LEFT, padx=2)
 
-        # Notebook with BBS List / Favorites tabs
+        # Notebook with BBS List / Favourites tabs
         self.notebook = ttk.Notebook(left_frame)
         self.notebook.pack(fill=tk.BOTH, expand=True)
         tab_bbs = ttk.Frame(self.notebook)
         tab_fav = ttk.Frame(self.notebook)
         self.notebook.add(tab_bbs, text="BBS List")
-        self.notebook.add(tab_fav, text="Favorites")
+        self.notebook.add(tab_fav, text="Favourites")
 
         # --- BBS List tab ---
         bbs_frame = ttk.Frame(tab_bbs)
@@ -769,7 +777,7 @@ class BBSDialDialog(tk.Toplevel):
         scrollbar.config(command=self.listbox.yview)
         self.refresh_listbox()
 
-        # --- Favorites tab ---
+        # --- Favourites tab ---
         fav_frame = ttk.Frame(tab_fav)
         fav_frame.pack(fill=tk.BOTH, expand=True)
         fav_scrollbar = ttk.Scrollbar(fav_frame)
@@ -793,7 +801,7 @@ class BBSDialDialog(tk.Toplevel):
         self.listbox.bind('<Down>', self.on_arrow_key)
         self.listbox.bind('<Return>', lambda e: self.connect())
 
-        # Bindings for Favorites listbox
+        # Bindings for Favourites listbox
         self.fav_listbox.bind('<<ListboxSelect>>', self.on_select)
         self.fav_listbox.bind('<Button-1>', self.on_click_fav)
         self.fav_listbox.bind('<Double-Button-1>', lambda e: self.connect())
@@ -807,42 +815,38 @@ class BBSDialDialog(tk.Toplevel):
 
         self.notebook.bind('<<NotebookTabChanged>>', self.on_tab_changed)
 
-        # Hotkeys: 1-9, A-Z
-        for i in range(1, 10):  # 1-9
-            self.bind(str(i), lambda e, idx=i-1: self.hotkey_connect(idx))
-        for c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ':  # A-Z
-            idx = 9 + (ord(c) - ord('A'))  # A=9, B=10, etc.
-            self.bind(c.lower(), lambda e, idx=idx: self.hotkey_connect(idx))
-            self.bind(c.upper(), lambda e, idx=idx: self.hotkey_connect(idx))
-
-        # Context Menu for BBS List (includes Copy to Favorites)
+        # Context Menu for BBS List (includes Copy to Favourites)
         self.context_menu = tk.Menu(self, tearoff=0)
-        self.context_menu.add_command(label="📋 Copy to Favorites", command=self.copy_to_favorites)
+        self.context_menu.add_command(label="📋 Copy to Favourites", command=self.copy_to_favorites)
         self.context_menu.add_separator()
         self.context_menu.add_command(label="⬆️ Move Up", command=self.move_up)
         self.context_menu.add_command(label="⬇️ Move Down", command=self.move_down)
+        self.context_menu.add_command(label="🔤 Sort List", command=self.sort_list)
         self.context_menu.add_separator()
         self.context_menu.add_command(label="💾 Export JSON", command=self.export_json)
+        self.context_menu.add_command(label="📥 Import JSON", command=self.import_json)
         self.context_menu.add_separator()
         self.context_menu.add_command(label="✏️ Edit Entry", command=self.edit_entry)
         self.context_menu.add_command(label="🗑️ Delete Entry", command=self.delete_entry)
         self.context_menu.add_separator()
         self.context_menu.add_command(label="➕ New Entry", command=self.new_entry)
 
-        # Context Menu for Favorites
+        # Context Menu for Favourites
         self.fav_context_menu = tk.Menu(self, tearoff=0)
         self.fav_context_menu.add_command(label="⬆️ Move Up", command=self.move_up)
         self.fav_context_menu.add_command(label="⬇️ Move Down", command=self.move_down)
+        self.fav_context_menu.add_command(label="🔤 Sort List", command=self.sort_list)
         self.fav_context_menu.add_separator()
         self.fav_context_menu.add_command(label="💾 Export JSON", command=self.export_json)
+        self.fav_context_menu.add_command(label="📥 Import JSON", command=self.import_json)
         self.fav_context_menu.add_separator()
-        self.fav_context_menu.add_command(label="🗑️ Remove from Favorites", command=self.remove_from_favorites)
+        self.fav_context_menu.add_command(label="🗑️ Remove from Favourites", command=self.remove_from_favorites)
         self.fav_context_menu.add_separator()
         self.fav_context_menu.add_command(label="✏️ Edit Entry", command=self.edit_entry)
         self.fav_context_menu.add_command(label="➕ New Entry", command=self.new_entry)
 
-        # Rechter Bereich: Bild + Details
-        right_frame = ttk.Frame(main_frame, width=400)
+        # Rechter Bereich: Bild + Details (420px, damit das 384px Preview nie klemmt)
+        right_frame = ttk.Frame(main_frame, width=420)
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=(10, 0))
         right_frame.pack_propagate(False)
 
@@ -885,7 +889,7 @@ class BBSDialDialog(tk.Toplevel):
         # Info Label
         info_frame = ttk.Frame(self)
         info_frame.pack(fill=tk.X, padx=10, pady=5)
-        ttk.Label(info_frame, text="💡 Hotkeys: 1-9, A-Z | Double-click = Connect | Right-click = Copy to Favorites | Scroll = Navigate",
+        ttk.Label(info_frame, text="💡 Double-click = Connect | Right-click = Copy to Favourites | Scroll = Navigate",
                  font=('Arial', 9, 'italic')).pack(anchor=tk.W)
 
         # Connection Mode Info (globaler Default)
@@ -940,31 +944,25 @@ class BBSDialDialog(tk.Toplevel):
             return self.bbs_list
         return self.favorites if idx == 1 else self.bbs_list
 
-    def _format_entry(self, bbs, idx):
-        if idx < 9:
-            hotkey = str(idx + 1)
-        elif idx < 35:
-            hotkey = chr(ord('A') + (idx - 9))
-        else:
-            hotkey = "-"
+    def _format_entry(self, bbs):
         username_info = f" [{bbs.get('username', '')}]" if bbs.get('username') else ""
         emu = bbs.get('emulation', 'C64 40col')
         emu_short = {'C64 40col': 'C64', 'C64 80col': 'C128', 'Amiga 80col': 'AMIGA'}.get(emu, emu)
-        return f"[{hotkey}] {bbs['name']:20s} {bbs['host']}:{bbs['port']}{username_info}  ({emu_short})"
+        return f"{bbs['name']:20s} {bbs['host']}:{bbs['port']}{username_info}  ({emu_short})"
 
     def refresh_listbox(self):
-        """Aktualisiert die BBS Listbox mit Hotkey-Nummern"""
+        """Aktualisiert die BBS Listbox"""
         self.listbox.delete(0, tk.END)
-        for idx, bbs in enumerate(self.bbs_list):
-            self.listbox.insert(tk.END, self._format_entry(bbs, idx))
+        for bbs in self.bbs_list:
+            self.listbox.insert(tk.END, self._format_entry(bbs))
 
     def refresh_favorites_listbox(self):
-        """Aktualisiert die Favorites Listbox"""
+        """Aktualisiert die Favourites Listbox"""
         if not hasattr(self, 'fav_listbox'):
             return
         self.fav_listbox.delete(0, tk.END)
-        for idx, bbs in enumerate(self.favorites):
-            self.fav_listbox.insert(tk.END, self._format_entry(bbs, idx))
+        for bbs in self.favorites:
+            self.fav_listbox.insert(tk.END, self._format_entry(bbs))
 
     def on_tab_changed(self, event=None):
         self.on_select(None)
@@ -982,7 +980,7 @@ class BBSDialDialog(tk.Toplevel):
             self.on_select(None)
 
     def on_click_fav(self, event):
-        """Einzelklick - Wählt Eintrag aus (Favorites)"""
+        """Einzelklick - Wählt Eintrag aus (Favourites)"""
         index = self.fav_listbox.nearest(event.y)
         if 0 <= index < len(self.favorites):
             self.fav_listbox.selection_clear(0, tk.END)
@@ -1102,16 +1100,6 @@ class BBSDialDialog(tk.Toplevel):
                                             fill='#FF6666', font=('Arial', 10), tags='placeholder')
             self.current_photo = None
 
-    def hotkey_connect(self, index):
-        """Verbindet mit BBS via Hotkey (active tab)"""
-        lst = self._active_list()
-        lb = self._active_listbox()
-        if 0 <= index < len(lst):
-            lb.selection_clear(0, tk.END)
-            lb.selection_set(index)
-            lb.see(index)
-            self.connect()
-
     def show_context_menu(self, event):
         """Zeigt Context Menu bei Rechtsklick (BBS List)"""
         index = self.listbox.nearest(event.y)
@@ -1124,7 +1112,7 @@ class BBSDialDialog(tk.Toplevel):
         self.context_menu.post(event.x_root, event.y_root)
 
     def show_fav_context_menu(self, event):
-        """Zeigt Context Menu bei Rechtsklick (Favorites)"""
+        """Zeigt Context Menu bei Rechtsklick (Favourites)"""
         index = self.fav_listbox.nearest(event.y)
         if 0 <= index < len(self.favorites):
             self.fav_listbox.selection_clear(0, tk.END)
@@ -1134,7 +1122,7 @@ class BBSDialDialog(tk.Toplevel):
         self.fav_context_menu.post(event.x_root, event.y_root)
 
     def copy_to_favorites(self):
-        """Copy selected BBS entry to Favorites (right-click -> copy)"""
+        """Copy selected BBS entry to Favourites (right-click -> copy)"""
         selection = self.listbox.curselection()
         if not selection:
             messagebox.showinfo("No Selection", "Please select an entry from the BBS List first!")
@@ -1144,13 +1132,13 @@ class BBSDialDialog(tk.Toplevel):
         # avoid duplicates by host+port
         for fav in self.favorites:
             if fav.get('host') == bbs.get('host') and fav.get('port') == bbs.get('port'):
-                messagebox.showinfo("Already in Favorites", f"'{bbs['name']}' is already in Favorites.")
+                messagebox.showinfo("Already in Favourites", f"'{bbs['name']}' is already in Favourites.")
                 return
         import copy
         self.favorites.append(copy.deepcopy(bbs))
         self.save_bbs_list()
         self.refresh_favorites_listbox()
-        # switch to Favorites tab so user sees result
+        # switch to Favourites tab so user sees result
         try:
             self.notebook.select(1)
         except Exception:
@@ -1200,15 +1188,39 @@ class BBSDialDialog(tk.Toplevel):
         lb.see(idx+1)
         self.on_select(None)
 
+    def sort_list(self):
+        """Sortiert die aktive Liste (BBS List oder Favourites) nach Name"""
+        lb = self._active_listbox()
+        lst = self._active_list()
+        if len(lst) < 2:
+            return
+        sel = lb.curselection()
+        current = lst[sel[0]] if sel else None
+        lst.sort(key=lambda b: (str(b.get('name', '')).casefold(),
+                                str(b.get('host', '')).casefold(),
+                                b.get('port', 0)))
+        self.save_bbs_list()
+        if lst is self.bbs_list:
+            self.refresh_listbox()
+        else:
+            self.refresh_favorites_listbox()
+        if current is not None:
+            idx = next((i for i, b in enumerate(lst) if b is current), 0)
+            lb.selection_clear(0, tk.END)
+            lb.selection_set(idx)
+            lb.activate(idx)
+            lb.see(idx)
+        self.on_select(None)
+
     def export_json(self):
-        """Export active list (BBS List or Favorites) to JSON file"""
+        """Export active list (BBS List or Favourites) to JSON file"""
         lst = self._active_list()
         is_fav = lst is self.favorites
         if not lst:
             messagebox.showinfo("Export", "Nothing to export - list is empty.")
             return
         default_name = "favorites.json" if is_fav else "bbs_list.json"
-        title = "Export Favorites" if is_fav else "Export BBS List"
+        title = "Export Favourites" if is_fav else "Export BBS List"
         path = filedialog.asksaveasfilename(
             parent=self,
             title=title,
@@ -1225,15 +1237,93 @@ class BBSDialDialog(tk.Toplevel):
         except Exception as e:
             messagebox.showerror("Export Failed", str(e))
 
+    @staticmethod
+    def _merge_entries(lst, raw):
+        """Merge validated entries into lst, skipping duplicates.
+
+        Duplicate key is (host, port), case-insensitive on host.
+        Mutates lst in place. Returns (added, skipped).
+        """
+        existing = set()
+        for b in lst:
+            try:
+                port = int(b.get('port', 23))
+            except (TypeError, ValueError):
+                port = b.get('port', 23)
+            existing.add((str(b.get('host', '')).lower().strip(), port))
+        added = skipped = 0
+        for bbs in raw:
+            if not isinstance(bbs, dict) or 'name' not in bbs or 'host' not in bbs:
+                skipped += 1
+                continue
+            entry = dict(bbs)
+            entry['host'] = str(entry.get('host', '')).strip()
+            try:
+                entry['port'] = int(entry.get('port', 23))
+            except (TypeError, ValueError):
+                entry['port'] = 23
+            entry.setdefault('description', '')
+            entry.setdefault('username', '')
+            entry.setdefault('password', '')
+            entry.setdefault('send_delay', 100)
+            entry.setdefault('connection_mode', 'ip')
+            entry.setdefault('emulation', 'C64 40col')
+            ident = (entry['host'].lower(), entry['port'])
+            if not entry['host'] or ident in existing:
+                skipped += 1
+                continue
+            existing.add(ident)
+            lst.append(entry)
+            added += 1
+        return added, skipped
+
+    def import_json(self):
+        """Import active list (BBS List or Favourites, je nach Tab) from JSON file."""
+        lst = self._active_list()
+        is_fav = lst is self.favorites
+        title = "Import Favourites" if is_fav else "Import BBS List"
+        path = filedialog.askopenfilename(
+            parent=self,
+            title=title,
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
+        )
+        if not path:
+            return
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception as e:
+            messagebox.showerror("Import Failed", f"Could not read JSON:\n{e}")
+            return
+        if isinstance(data, dict):
+            key = 'favorites' if is_fav else 'bbs_list'
+            if key not in data or not isinstance(data[key], list):
+                messagebox.showinfo("Import", f"No '{key}' list found in\n{path}")
+                return
+            raw = data[key]
+        elif isinstance(data, list):
+            raw = data
+        else:
+            messagebox.showerror("Import Failed",
+                                 "JSON must be a list or an object with 'bbs_list'/'favorites'.")
+            return
+        added, skipped = self._merge_entries(lst, raw)
+        if added:
+            self.save_bbs_list()
+            self.refresh_listbox()
+            self.refresh_favorites_listbox()
+        messagebox.showinfo("Import Complete",
+                            f"Added {added} entries.\n{skipped} duplicates/invalid skipped.")
+
     def remove_from_favorites(self):
-        """Remove selected entry from Favorites"""
+        """Remove selected entry from Favourites"""
         selection = self.fav_listbox.curselection()
         if not selection:
-            messagebox.showinfo("No Selection", "Please select an entry from Favorites first!")
+            messagebox.showinfo("No Selection", "Please select an entry from Favourites first!")
             return
         idx = selection[0]
         bbs = self.favorites[idx]
-        if messagebox.askyesno("Remove Favorite", f"Remove '{bbs['name']}' from Favorites?"):
+        if messagebox.askyesno("Remove Favorite", f"Remove '{bbs['name']}' from Favourites?"):
             del self.favorites[idx]
             self.save_bbs_list()
             self.refresh_favorites_listbox()
@@ -1348,7 +1438,7 @@ class BBSDialDialog(tk.Toplevel):
                             f"Added {added} online BBS entries.\n{skipped} duplicate entries skipped.")
 
     def load_bbs_list(self):
-        """Lädt BBS Liste und Favorites aus bbs_config.json"""
+        """Lädt BBS Liste und Favourites aus bbs_config.json"""
         try:
             if os.path.exists('bbs_config.json'):
                 with open('bbs_config.json', 'r', encoding='utf-8') as f:
@@ -1394,7 +1484,7 @@ class BBSDialDialog(tk.Toplevel):
             print(f"Error loading BBS list: {e}")
 
     def save_bbs_list(self):
-        """Speichert BBS Liste und Favorites in bbs_config.json"""
+        """Speichert BBS Liste und Favourites in bbs_config.json"""
         try:
             config = {}
             if os.path.exists('bbs_config.json'):
@@ -1854,30 +1944,6 @@ class SettingsDialog(tk.Toplevel):
         ttk.Label(debug_frame, text="💡 Waiting indicator and CTRL+X always available", 
                  font=('Arial', 8, 'italic')).pack(anchor=tk.W, pady=(5, 0))
         
-        # Punter Einstellungen
-        punter_frame = ttk.LabelFrame(right_col, text="Punter", padding=10)
-        punter_frame.pack(fill=tk.X, pady=5)
-        
-        current_punter_timeout = parent.settings.get('punter_connection_timeout')
-        punter_timeout = current_punter_timeout if isinstance(current_punter_timeout, int) else 30
-        if punter_timeout < 30:
-            punter_timeout = 30
-        self.punter_timeout_var = tk.IntVar(value=punter_timeout)
-        
-        timeout_row = ttk.Frame(punter_frame)
-        timeout_row.pack(fill=tk.X, pady=2)
-        ttk.Label(timeout_row, text="Connection Timeout (s):", font=('Arial', 9)).pack(side=tk.LEFT)
-        ttk.Spinbox(timeout_row, from_=30, to=600, increment=10, width=6,
-                    textvariable=self.punter_timeout_var).pack(side=tk.LEFT, padx=5)
-        
-        self.multi_punter_var = tk.BooleanVar(value=parent.settings.get('use_multi_punter', False))
-        ttk.Label(punter_frame, text="💡 Timeout before file header arrives\n (Multi-Punter only)", 
-                         font=('Arial', 8, 'italic')).pack(anchor=tk.W, pady=(3, 0))
-        ttk.Checkbutton(punter_frame, text="Use Multi-Punter (batch download)",
-                        variable=self.multi_punter_var).pack(anchor=tk.W, pady=(3, 0))
-        ttk.Label(punter_frame, text="📦 Multi-Punter allows downloading multiple files,\n waits for header before each file", 
-                 font=('Arial', 8, 'italic')).pack(anchor=tk.W)
-        
         # Transfer Folders
         folders_frame = ttk.LabelFrame(right_col, text="Transfer Folders", padding=10)
         folders_frame.pack(fill=tk.X, pady=5)
@@ -2115,8 +2181,6 @@ class SettingsDialog(tk.Toplevel):
                     'connection_mode': self.conn_mode_var.get(),
                     'serial_port': self.comport_var.get(),
                     'serial_baudrate': baudrate,
-                    'punter_connection_timeout': self.punter_timeout_var.get(),
-                    'use_multi_punter': self.multi_punter_var.get()
                 }
                 break
         self.destroy()
@@ -4447,6 +4511,8 @@ class BBSTerminal(TextSelectionMixin, tk.Tk):
         self.screen_width = self.settings.get('screen_width', 40)
         self.screen_height = 25
         self._transfer_active = False
+        self.active_transfer = None  # Laufender FileTransfer (für CTRL+X per Taste)
+        self.active_progress = None  # Zugehöriger Progress-Dialog
         self.current_zoom = 4  # Starte mit höherem Zoom
         self.fullscreen = False  # Fullscreen-Status
         
@@ -5033,6 +5099,32 @@ class BBSTerminal(TextSelectionMixin, tk.Tk):
         
         return "break"
     
+    def _abort_active_transfer(self):
+        """CTRL+X per Taste: beendet den laufenden Transfer (wie der Abort-Button)."""
+        dlg = getattr(self, 'active_progress', None)
+        if dlg is not None:
+            try:
+                dlg._manual_ctrlx()  # Sendet 0x18, setzt cancel-Flag, schließt Dialog
+                return
+            except Exception as e:
+                debug_print(f"[CTRL+X] Dialog abort failed: {e}")
+        # Fallback ohne Dialog: Transfer direkt stoppen + 0x18 ans BBS
+        t = getattr(self, 'active_transfer', None)
+        if t is not None:
+            try:
+                t.send_raw(bytes([0x18]))
+            except Exception:
+                pass
+            try:
+                t.cancel()
+            except Exception:
+                pass
+        try:
+            if self.bbs_connection:
+                self.bbs_connection.send_key(0x18)
+        except Exception:
+            pass
+    
     def on_key_press(self, event):
         """Tastatur-Handler mit terminal.map Unterstützung"""
         if not self.connected:
@@ -5041,8 +5133,12 @@ class BBSTerminal(TextSelectionMixin, tk.Tk):
                 return self._handle_comport_keypress(event)
             return
         
-        # WICHTIG: Während Transfer KEINE Tastatur-Eingaben senden!
+        # CTRL+X während Transfer: Abbruch (wie der CTRL+X-Button im Dialog).
+        # Alle anderen Tasten werden während eines Transfers geschluckt.
         if self.transfer_active:
+            ctrl = (event.state & 0x4) != 0
+            if ctrl and event.keysym.lower() == 'x':
+                self._abort_active_transfer()
             return "break"
         
         shift = (event.state & 0x1) != 0
@@ -5343,6 +5439,10 @@ class BBSTerminal(TextSelectionMixin, tk.Tk):
             
             # Setze FileTransfer-Referenz für Live-Updates (alle Transfers)
             progress.file_transfer = transfer
+            # Für CTRL+X per Taste: aktiven Transfer + Dialog merken
+            # (werden nur bei transfer_active=True benutzt, danach irrelevant)
+            self.active_transfer = transfer
+            self.active_progress = progress
             transfer.set_live_callback(progress.live_update)
             
             start_time = time.time()
@@ -5511,10 +5611,13 @@ class BBSTerminal(TextSelectionMixin, tk.Tk):
             log_dir = self.settings.get('download_folder', os.path.dirname(os.path.abspath(__file__)))
             
             transfer = FileTransfer(self.bbs_connection.client, self.current_protocol, speed_profile, log_dir=log_dir, debug=transfer_debug)
-            transfer.use_multi_punter = self.settings.get('use_multi_punter', False)
             
             # Setze FileTransfer-Referenz für Live-Updates (alle Transfers)
             progress.file_transfer = transfer
+            # Für CTRL+X per Taste: aktiven Transfer + Dialog merken
+            # (werden nur bei transfer_active=True benutzt, danach irrelevant)
+            self.active_transfer = transfer
+            self.active_progress = progress
             transfer.set_live_callback(progress.live_update)
             
             start_time = time.time()
@@ -5587,8 +5690,7 @@ class BBSTerminal(TextSelectionMixin, tk.Tk):
                                   progress.update_progress(d, t, s, fn))
             
             try:
-                punter_connection_timeout = self.settings.get('punter_connection_timeout')
-                success = transfer.receive_file(filepath, callback, connection_timeout=punter_connection_timeout)
+                success = transfer.receive_file(filepath, callback)
             except Exception as e:
                 transfer.log(f"EXCEPTION in receive_file: {e}")
                 import traceback
@@ -6126,17 +6228,6 @@ class BBSTerminal(TextSelectionMixin, tk.Tk):
                     state = "enabled" if new_debug else "disabled"
                     print(f"Transfer debug mode {state}")
             
-            # Punter timeout and multi-download preferences
-            if 'punter_connection_timeout' in dialog.result:
-                self.settings['punter_connection_timeout'] = dialog.result['punter_connection_timeout']
-                self.save_config()
-                debug_print(f"Punter connection timeout set to: {dialog.result['punter_connection_timeout']}")
-            
-            if 'use_multi_punter' in dialog.result:
-                self.settings['use_multi_punter'] = dialog.result['use_multi_punter']
-                self.save_config()
-                debug_print(f"Multi-Punter mode {'enabled' if dialog.result['use_multi_punter'] else 'disabled'}")
-            
             # Amiga Height speichern
             if 'amiga_height' in dialog.result:
                 self.settings['amiga_height'] = dialog.result['amiga_height']
@@ -6244,6 +6335,10 @@ class BBSTerminal(TextSelectionMixin, tk.Tk):
             transfer = FileTransfer(self.bbs_connection.client, TransferProtocol.ZMODEM, 
                                     speed_profile, log_dir=log_dir, debug=transfer_debug)
             progress.file_transfer = transfer
+            # Für CTRL+X per Taste: aktiven Transfer + Dialog merken
+            # (werden nur bei transfer_active=True benutzt, danach irrelevant)
+            self.active_transfer = transfer
+            self.active_progress = progress
             transfer.set_live_callback(progress.live_update)
             
             start_time = time.time()
@@ -6370,6 +6465,10 @@ class BBSTerminal(TextSelectionMixin, tk.Tk):
             transfer = FileTransfer(self.bbs_connection.client, TransferProtocol.ZMODEM,
                                     speed_profile, log_dir=download_dir, debug=transfer_debug)
             progress.file_transfer = transfer
+            # Für CTRL+X per Taste: aktiven Transfer + Dialog merken
+            # (werden nur bei transfer_active=True benutzt, danach irrelevant)
+            self.active_transfer = transfer
+            self.active_progress = progress
             
             start_time = time.time()
             
@@ -7288,8 +7387,6 @@ class BBSTerminal(TextSelectionMixin, tk.Tk):
                     config.setdefault('local_echo', False)
                     config.setdefault('use_day_folders', False)
                     config.setdefault('window_geometry', '')
-                    config.setdefault('punter_connection_timeout', None)
-                    config.setdefault('use_multi_punter', False)
                     return config
         except:
             pass
@@ -7302,8 +7399,7 @@ class BBSTerminal(TextSelectionMixin, tk.Tk):
             'connection_mode': 'ip',
             'serial_port': '',
             'serial_baudrate': 9600,
-            'local_echo': False,
-            'use_multi_punter': False
+            'local_echo': False
         }
     
     def get_day_folder(self, base_dir, for_upload=False):
